@@ -9,11 +9,11 @@ from unittest.mock import Mock, patch
 
 from botocore.exceptions import ClientError
 
-from lambdas.webhok import main
-from lambdas.webhok.config import ConfigurationError, load_config
-from lambdas.webhok.github_webhook import verify_signature
-from lambdas.webhok.secret import get_webhook_secret
-from lambdas.webhok.sqs_queue import get_sqs_client
+from lambdas.webhook import main
+from lambdas.webhook.config import ConfigurationError, load_config
+from lambdas.webhook.github_webhook import verify_signature
+from lambdas.webhook.secret import get_webhook_secret
+from lambdas.webhook.sqs_queue import get_sqs_client
 
 
 SECRET = "test-only-webhook-secret"
@@ -70,7 +70,7 @@ class SignatureTests(unittest.TestCase):
                 self.assertFalse(verify_signature(b"body", signature, SECRET))
 
     def test_uses_constant_time_comparison(self):
-        with patch("lambdas.webhok.github_webhook.hmac.compare_digest", return_value=True) as compare:
+        with patch("lambdas.webhook.github_webhook.hmac.compare_digest", return_value=True) as compare:
             self.assertTrue(verify_signature(b"body", "sha256=" + "0" * 64, SECRET))
         compare.assert_called_once()
 
@@ -178,7 +178,7 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(json.loads(kwargs["MessageBody"]), EXPECTED_MESSAGE)
 
     def test_typed_provisioning_request(self):
-        with patch("lambdas.webhok.main.send_request") as send:
+        with patch("lambdas.webhook.main.send_request") as send:
             self.assert_status(signed_event(), 200)
         request, queue_url = send.call_args.args
         self.assertEqual(type(request).__name__, "ProvisioningRequest")
@@ -247,7 +247,7 @@ class HandlerTests(unittest.TestCase):
     def test_unauthorized_repository(self):
         payload = copy.deepcopy(PAYLOAD)
         payload["repository"]["full_name"] = "untrusted/repository"
-        with self.assertLogs("lambdas.webhok", level="WARNING") as logs:
+        with self.assertLogs("lambdas.webhook", level="WARNING") as logs:
             self.assert_not_queued(signed_event(payload))
         self.assertIn("Unauthorized repository", " ".join(logs.output))
 
@@ -292,7 +292,7 @@ class HandlerTests(unittest.TestCase):
             with self.subTest(labels=labels):
                 payload = copy.deepcopy(PAYLOAD)
                 payload["workflow_job"]["labels"] = labels
-                with self.assertLogs("lambdas.webhok", level="INFO") as logs:
+                with self.assertLogs("lambdas.webhook", level="INFO") as logs:
                     self.assert_status(signed_event(payload), 200)
                 message = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
                 self.assertEqual(message, {**EXPECTED_MESSAGE, "labels": labels})
@@ -324,7 +324,7 @@ class HandlerTests(unittest.TestCase):
     def test_multiple_supported_flavors(self):
         payload = copy.deepcopy(PAYLOAD)
         payload["workflow_job"]["labels"] = ["self-hosted", "general", "heavy"]
-        with self.assertLogs("lambdas.webhok", level="WARNING") as logs:
+        with self.assertLogs("lambdas.webhook", level="WARNING") as logs:
             self.assert_not_queued(signed_event(payload))
         self.assertIn("Multiple supported flavors", " ".join(logs.output))
 
@@ -397,7 +397,7 @@ class HandlerTests(unittest.TestCase):
         self.ssm.get_parameter.side_effect = ClientError(
             {"Error": {"Code": "AccessDeniedException", "Message": private_detail}}, "GetParameter"
         )
-        with self.assertLogs("lambdas.webhok", level="ERROR") as logs:
+        with self.assertLogs("lambdas.webhook", level="ERROR") as logs:
             result = self.assert_not_queued(signed_event(), 500)
         self.assertNotIn(private_detail, result["body"] + " ".join(logs.output))
         self.assertIn("ssm_get_parameter", " ".join(logs.output))
@@ -421,7 +421,7 @@ class HandlerTests(unittest.TestCase):
         self.sqs.send_message.side_effect = ClientError(
             {"Error": {"Code": "ServiceUnavailable", "Message": private_detail}}, "SendMessage"
         )
-        with self.assertLogs("lambdas.webhok", level="ERROR") as logs:
+        with self.assertLogs("lambdas.webhook", level="ERROR") as logs:
             result = self.assert_status(signed_event(), 500)
         output = " ".join(logs.output)
         self.assertNotIn(private_detail, result["body"] + output)
@@ -431,7 +431,7 @@ class HandlerTests(unittest.TestCase):
 
     def test_logs_exclude_secret_signature_and_full_payload(self):
         event = signed_event()
-        with self.assertLogs("lambdas.webhok", level="INFO") as logs:
+        with self.assertLogs("lambdas.webhook", level="INFO") as logs:
             self.assert_status(event, 200)
         output = " ".join(logs.output)
         for value in (SECRET, event["headers"]["X-Hub-Signature-256"], "not-forwarded", "unneeded_field"):

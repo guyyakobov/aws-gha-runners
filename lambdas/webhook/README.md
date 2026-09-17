@@ -1,107 +1,67 @@
-# GitHub webhook ingress (Lambda #1)
+# GitHub webhook Lambda
 
-This Lambda authenticates GitHub webhooks, validates queued workflow jobs, and
-publishes a small provisioning request to SQS. The directory name `webhok` follows
-the requested path. There is no provisioner or infrastructure in this implementation.
+Receives GitHub webhooks through API Gateway, verifies the signature, and sends
+accepted runner requests to SQS. It handles queued `workflow_job` events from
+allowed repositories whose jobs include the `self-hosted` label.
 
-## Handler and packaging
+## Setup
 
-Use Python 3.12 or newer. Set the Lambda handler to:
+Use Python 3.12 or newer with this handler:
 
 ```text
-lambdas.webhok.main.lambda_handler
+lambdas.webhook.main.lambda_handler
 ```
 
-Preserve `lambdas/webhook/` relative to the deployment archive root, and install
-`requirements.txt` dependencies at that root. `lambdas` is a Python namespace
-package. Exclude tests, local environments, and example configuration from the
-deployment archive. No AWS clients or secret reads occur during module import.
+Keep `lambdas/webhook/` at the deployment archive root and install the dependencies
+from `requirements.txt` at that root. Use an API Gateway proxy integration
+(payload format 1.0 or 2.0) that preserves the original request body. Base64-encoded
+bodies are supported.
 
-Use an API Gateway Lambda proxy integration (payload format 1.0 or 2.0).
-The original request body must reach Lambda without JSON mapping templates or
-other content transformations. The handler decodes base64 when
-`isBase64Encoded` is true; otherwise it recovers UTF-8 bytes from `body`.
-Header names are case-insensitive, and ambiguous signature headers are rejected.
+Set all five environment variables. See [.env.example](.env.example) for examples.
+The application reads environment variables directly; it does not load `.env`.
 
-## Configuration
-
-All five variables are required; Python has no deployment-specific defaults:
-
-| Variable | Meaning |
+| Variable | Value |
 | --- | --- |
-| `SQS_QUEUE_URL` | HTTPS URL of the destination standard SQS queue |
-| `WEBHOOK_SECRET_SSM_PARAMETER` | Name or ARN of the webhook secret SecureString |
-| `ALLOWED_REPOSITORIES` | JSON array of authorized exact `owner/repository` names |
-| `SUPPORTED_FLAVORS` | Comma-separated, nonempty, unique supported labels |
-| `DEFAULT_FLAVOR` | Flavor to use when no supported flavor label matches; must be in `SUPPORTED_FLAVORS` |
+| `SQS_QUEUE_URL` | HTTPS URL of the standard SQS queue |
+| `WEBHOOK_SECRET_SSM_PARAMETER` | Name or ARN of the webhook secret in SSM |
+| `ALLOWED_REPOSITORIES` | JSON array, such as `["your-org/your-repo"]` |
+| `SUPPORTED_FLAVORS` | Comma-separated labels, currently `general,heavy` |
+| `DEFAULT_FLAVOR` | Fallback flavor, currently `general`; must be in `SUPPORTED_FLAVORS` |
 
-See `.env.example` for example values only. The application reads native environment
-variables and does not load `.env` or depend on python-dotenv. If using shell
-exports locally, quote the whole JSON array with single quotes. An empty array
-`[]` intentionally authorizes no repositories. Repository and label matching are
-case-sensitive; repository names should match GitHub's `repository.full_name`.
+Repository names and labels are matched exactly, including case. An empty
+repository array allows no repositories.
 
-For the current setup, configure `SUPPORTED_FLAVORS=general,heavy` and
-`DEFAULT_FLAVOR=general`. Neither flavor is hardcoded in the application.
-The former repository-to-pool mapping is replaced by this allowlist; there is no
-pool field in the queue contract. Existing Lambda configuration must supply
-`ALLOWED_REPOSITORIES` and `DEFAULT_FLAVOR` when moving to this version.
+Store the webhook secret as an SSM `SecureString`. The Lambda retrieves it with
+`WithDecryption=True` and caches successful reads for the lifetime of the execution
+environment. After rotating the secret, replace warm environments or change the
+configured parameter name.
 
-Store the real GitHub webhook secret separately as an SSM `SecureString`.
-On the first authenticated-format request, the Lambda calls
-`get_parameter(Name=..., WithDecryption=True)` and checks the parameter type and
-value. Successful retrieval is cached per parameter name for the lifetime of the
-warm execution environment; failed retrieval is retried on the next invocation.
-Secret rotation requires recycling warm execution environments (or changing the
-configured parameter name). Configuration itself is validated each invocation.
+## Flavor selection
 
-## Request handling
+With `SUPPORTED_FLAVORS=general,heavy` and `DEFAULT_FLAVOR=general`:
 
-1. Check the signature format, recover raw bytes, retrieve the secret, and verify
-   HMAC-SHA256 using `hmac.compare_digest` before JSON parsing or event filtering.
-2. Parse authenticated JSON. Only `X-GitHub-Event: workflow_job` with
-   `action: queued` proceeds to required job-field validation.
-3. Require positive integer job, run, and installation IDs, an `owner/repository`
-   name, and an array of nonempty string labels. A missing or malformed labels
-   field is a 400; an empty array is valid but cannot request a self-hosted runner.
-4. Require the repository to be in `ALLOWED_REPOSITORIES` and labels to contain
-   `self-hosted`. Jobs without that label are ignored, so the default does not
-   cause provisioning for ordinary GitHub-hosted jobs.
-5. Intersect distinct job labels with `SUPPORTED_FLAVORS`. One match selects that
-   flavor; zero matches selects `DEFAULT_FLAVOR`; multiple matches are ignored
-   as ambiguous. Duplicate occurrences of one flavor count as one match.
-   Preserve the original labels without adding a default-flavor label.
-6. Serialize the typed `ProvisioningRequest` and call SQS `SendMessage`, using
-   only the configured destination URL.
+| Job labels | Result |
+| --- | --- |
+| `[self-hosted, linux]` | Queue `general` |
+| `[self-hosted, linux, general]` | Queue `general` |
+| `[self-hosted, linux, heavy]` | Queue `heavy` |
+| `[self-hosted, general, heavy]` | Ignore: more than one flavor |
+| `[ubuntu-latest]` | Ignore: no `self-hosted` label |
 
-| Condition | HTTP status | Sent to SQS? |
-| --- | --- | --- |
-| Missing, malformed, or incorrect signature | 401 | No |
-| Valid unrelated event / non-queued action | 200 | No |
-| Unauthorized repository | 200 | No |
-| No `self-hosted` label | 200 | No |
-| Multiple supported flavors | 200 | No |
-| Authorized self-hosted job with no supported flavor label | 200 | Yes, using `DEFAULT_FLAVOR` |
-| Malformed body, JSON, event header, or required queued-job fields | 400 | No |
-| Missing/malformed configuration or SSM/internal failure | 500 | No |
-| SQS failure | 500 | Delivery may be uncertain if a network error followed acceptance |
-| Valid supported queued job and successful SQS send | 200 | Yes |
+When no supported flavor matches, the default is used. This also applies to
+unknown labels: `[self-hosted, typo]` selects the default and preserves `typo` in
+the message. The fallback selects compute; it does not guarantee a runner will
+match every requested label. Duplicate occurrences of the same flavor count once.
 
-Signature validation requires healthy configuration and SSM; failures there return
-500 when the supplied signature is syntactically valid. A malformed body encoding
-returns 400 because there are no recoverable bytes to verify. Authenticated but
-malformed JSON returns 400 even for unrelated events. Non-queued actions do not
-require the fields used solely for provisioning.
+Both flavors use the same runner IAM role/instance profile and SSM JIT namespace.
+Those shared settings and the instance-type mapping belong to the provisioner,
+which is not implemented here. The repository stays in the message so per-team
+configuration can be added later.
 
-Logs include validation reasons and job/repository/flavor context where
-available. Ambiguous-flavor and default-selection logs also include labels. Secrets, signatures, full
-webhook payloads, and raw exception details are never deliberately logged. Public
-400/401/500 responses contain generic messages.
+## SQS message
 
-## SQS contract
-
-Exactly these six fields are sent; IDs are positive JSON integers and labels are
-an array of strings:
+Only these six fields are sent. IDs are positive integers; labels are preserved
+from the webhook.
 
 ```json
 {
@@ -114,74 +74,51 @@ an array of strings:
 }
 ```
 
-`flavor` is an approved configuration value. Labels remain
-authenticated GitHub input; future consumers must not treat arbitrary labels as
-privileged resource identifiers. This version assumes a standard queue; FIFO
-message grouping/deduplication is not implemented. Webhook redeliveries and SQS
-delivery can produce duplicates, so the future provisioner needs idempotency
-using the job identity. This Lambda does not access a DLQ.
+The consumer must handle duplicate requests by job identity. A failed SQS call
+returns 500, though a network failure can leave delivery uncertain. This Lambda
+sends to a standard queue and does not access the DLQ.
 
-## Compute flavors and the shared runner configuration
+## Responses and logs
 
-There is currently one runner trust domain. `general` and `heavy` select only
-compute configuration, such as instance type. The future provisioner must use
-one shared runner IAM role/instance profile and one shared SSM JIT namespace for
-both flavors. Those deployment settings belong to the provisioner; Lambda #1
-neither selects nor sends IAM roles, instance profiles, or JIT parameter paths.
+The Lambda verifies `X-Hub-Signature-256` against the raw body using HMAC-SHA256
+and a constant-time comparison before parsing JSON.
 
-With `DEFAULT_FLAVOR=general`:
-
-| Workflow labels | Result |
+| Status | Meaning |
 | --- | --- |
-| `[self-hosted, linux]` | Queue `general` |
-| `[self-hosted, linux, general]` | Queue `general` |
-| `[self-hosted, linux, heavy]` | Queue `heavy` |
-| `[self-hosted, general, heavy]` | Ignore ambiguous flavor request |
-| `[ubuntu-latest]` | Ignore job without `self-hosted` |
+| `200` | Request queued, or ignored because the event, action, repository, or labels do not qualify |
+| `400` | Malformed body, JSON, event header, or required job fields |
+| `401` | Missing or invalid signature |
+| `500` | Configuration, SSM, SQS, or other internal failure |
 
-Flat labels do not distinguish an unknown flavor from an unrelated custom label.
-Consequently, `[self-hosted, linux, typo]` also selects the default compute flavor
-and preserves `typo` in the message. This fallback does not guarantee that a runner
-will match every requested label. The future provisioner must define the labels
-its runners actually support.
+Malformed body encoding returns 400 before signature verification can finish.
+Configuration or SSM failures return 500 when the supplied signature has a valid
+format. Authenticated malformed JSON returns 400 even for unrelated events.
 
-The repository identity stays in the message, so a future version can add explicit,
-configured per-team/trust-domain routing without using compute flavor as an
-authorization boundary. No unused routing abstraction is introduced now.
+Logs include rejection reasons and job, repository, and flavor context. Secret
+values, signatures, full payloads, and raw AWS exception messages are omitted.
+Error responses contain generic messages.
 
 ## IAM permissions
 
-The Lambda execution role needs:
+The webhook Lambda execution role needs:
 
-- `ssm:GetParameter` scoped to the webhook secret parameter.
-- `kms:Decrypt` on its KMS key when using a customer managed key, with a key policy
-  that permits the role to decrypt.
-- `sqs:SendMessage` scoped to the destination queue.
-- `logs:CreateLogStream` and `logs:PutLogEvents` for its CloudWatch log group;
-  `logs:CreateLogGroup` if the log group is not pre-created.
-- For a queue encrypted with a customer managed KMS key, `kms:GenerateDataKey`
-  and `kms:Decrypt` on that queue key, plus the corresponding key-policy access.
+- `ssm:GetParameter` on the secret parameter.
+- `sqs:SendMessage` on the destination queue.
+- `logs:CreateLogStream` and `logs:PutLogEvents` on its log group, plus
+  `logs:CreateLogGroup` if the group is not created beforehand.
+- `kms:Decrypt` if the secret uses a customer managed key.
+- `kms:GenerateDataKey` and `kms:Decrypt` if the queue uses a customer managed key.
 
-No GitHub API, EC2, SSM write, queue receive/delete, or DLQ permissions are needed.
+Customer managed key policies must also permit that access.
 
-## Local tests
+## Tests
 
-From the repository root, with Python and pip installed:
+Run from the repository root:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r lambdas/webhok/requirements.txt
-.venv/bin/python -m unittest discover -s lambdas/webhok/tests -v
+.venv/bin/python -m pip install -r lambdas/webhook/requirements.txt
+.venv/bin/python -m unittest discover -s lambdas/webhook/tests -v
 ```
 
-Tests use standard-library `unittest` and mock every boto3 client creation. They
-need no AWS credentials, deployed services, or real webhook secret. Coverage
-includes authentication, byte preservation, filtering, configuration, payload
-validation, the exact message contract, secret caching/retry, and safe failures.
-
-## References
-
-- [GitHub webhook signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
-- [API Gateway proxy payload formats](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html)
-- [SSM GetParameter](https://docs.aws.amazon.com/boto3/latest/reference/services/ssm/client/get_parameter.html)
-- [SQS SendMessage](https://docs.aws.amazon.com/boto3/latest/reference/services/sqs/client/send_message.html)
+Tests mock AWS calls and need no credentials or deployed resources.
