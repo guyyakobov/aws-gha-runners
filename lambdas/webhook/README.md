@@ -1,8 +1,8 @@
 # GitHub webhook Lambda
 
 Receives GitHub webhooks through API Gateway, verifies the signature, and sends
-accepted runner requests to SQS. It handles queued `workflow_job` events from
-allowed repositories whose jobs include the `self-hosted` label.
+accepted runner requests to SQS. It handles queued `workflow_job` events whose
+jobs include the `self-hosted` label.
 
 ## Setup
 
@@ -17,19 +17,20 @@ from `requirements.txt` at that root. Use an API Gateway proxy integration
 (payload format 1.0 or 2.0) that preserves the original request body. Base64-encoded
 bodies are supported.
 
-Set all five environment variables. See [.env.example](.env.example) for examples.
+Set all four environment variables. See [.env.example](.env.example) for examples.
 The application reads environment variables directly; it does not load `.env`.
 
 | Variable | Value |
 | --- | --- |
 | `SQS_QUEUE_URL` | HTTPS URL of the standard SQS queue |
 | `WEBHOOK_SECRET_SSM_PARAMETER` | Name or ARN of the webhook secret in SSM |
-| `ALLOWED_REPOSITORIES` | JSON array, such as `["your-org/your-repo"]` |
 | `SUPPORTED_FLAVORS` | Comma-separated labels, currently `general,heavy` |
 | `DEFAULT_FLAVOR` | Fallback flavor, currently `general`; must be in `SUPPORTED_FLAVORS` |
 
-Repository names and labels are matched exactly, including case. An empty
-repository array allows no repositories.
+Repository access is managed through the GitHub App installation settings.
+The webhook Lambda has no repository, organization, or installation allowlist.
+Repository names still undergo schema validation, and label matching is
+case-sensitive.
 
 Store the webhook secret as an SSM `SecureString`. The Lambda retrieves it with
 `WithDecryption=True` and caches successful reads for the lifetime of the execution
@@ -63,6 +64,10 @@ configuration can be added later.
 Only these six fields are sent. IDs are positive integers; labels are preserved
 from the webhook.
 
+`installation_id` comes directly from `installation.id` in the authenticated
+webhook. The provisioner uses that ID for the installation-token exchange and
+the repository from the same message for JIT generation.
+
 ```json
 {
   "job_id": 123,
@@ -85,7 +90,7 @@ and a constant-time comparison before parsing JSON.
 
 | Status | Meaning |
 | --- | --- |
-| `200` | Request queued, or ignored because the event, action, repository, or labels do not qualify |
+| `200` | Request queued, or ignored because the event, action, or labels do not qualify |
 | `400` | Malformed body, JSON, event header, or required job fields |
 | `401` | Missing or invalid signature |
 | `500` | Configuration, SSM, SQS, or other internal failure |

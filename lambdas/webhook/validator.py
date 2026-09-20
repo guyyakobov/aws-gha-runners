@@ -9,10 +9,6 @@ logger = logging.getLogger(__name__)
 
 def validate_job(job: WorkflowJob, config: Config) -> ProvisioningRequest | None:
     context = {"job_id": job.job_id, "repository": job.repository}
-    if job.repository not in config.allowed_repositories:
-        logger.warning("Unauthorized repository: %s", json.dumps(context))
-        return None
-
     context.update(labels=job.labels)
     if "self-hosted" not in job.labels:
         logger.info("Ignored job without self-hosted label: %s", json.dumps(context))

@@ -1,4 +1,3 @@
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -14,7 +13,6 @@ class ConfigurationError(ValueError):
 class Config:
     queue_url: str
     secret_parameter: str
-    allowed_repositories: frozenset[str]
     supported_flavors: frozenset[str]
     default_flavor: str
 
@@ -51,17 +49,6 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     if any(c.isspace() for c in secret_parameter):
         raise ConfigurationError("WEBHOOK_SECRET_SSM_PARAMETER cannot contain whitespace")
 
-    try:
-        repositories = json.loads(required("ALLOWED_REPOSITORIES"))
-    except json.JSONDecodeError:
-        raise ConfigurationError("ALLOWED_REPOSITORIES must be a JSON array") from None
-    if not isinstance(repositories, list) or not all(
-        valid_repository_name(repo) for repo in repositories
-    ):
-        raise ConfigurationError(
-            "ALLOWED_REPOSITORIES must be a JSON array of owner/repository names"
-        )
-
     flavors = [flavor.strip() for flavor in required("SUPPORTED_FLAVORS").split(",")]
     if not all(flavors) or len(set(flavors)) != len(flavors):
         raise ConfigurationError("SUPPORTED_FLAVORS must contain unique, nonempty labels")
@@ -73,7 +60,6 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     return Config(
         queue_url=queue_url,
         secret_parameter=secret_parameter,
-        allowed_repositories=frozenset(repositories),
         supported_flavors=frozenset(flavors),
         default_flavor=default_flavor,
     )

@@ -20,7 +20,6 @@ SECRET = "test-only-webhook-secret"
 ENV = {
     "SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/test-jobs",
     "WEBHOOK_SECRET_SSM_PARAMETER": "/tests/webhook-secret",
-    "ALLOWED_REPOSITORIES": '["example/project"]',
     "SUPPORTED_FLAVORS": "general,heavy",
     "DEFAULT_FLAVOR": "general",
 }
@@ -80,7 +79,6 @@ class ConfigTests(unittest.TestCase):
         config = load_config(ENV)
         self.assertEqual(config.queue_url, ENV["SQS_QUEUE_URL"])
         self.assertEqual(config.secret_parameter, ENV["WEBHOOK_SECRET_SSM_PARAMETER"])
-        self.assertEqual(config.allowed_repositories, frozenset({"example/project"}))
         self.assertEqual(config.supported_flavors, frozenset({"general", "heavy"}))
         self.assertEqual(config.default_flavor, "general")
 
@@ -95,20 +93,6 @@ class ConfigTests(unittest.TestCase):
                         env[key] = value
                     with self.assertRaisesRegex(ConfigurationError, key):
                         load_config(env)
-
-    def test_malformed_repository_allowlist(self):
-        for value in (
-            "[", "null", "{}", '"text"', '{"example/project":"legacy-value"}',
-            '[null]', '[123]', '[""]', '["invalid"]', '[" example/project "]',
-        ):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ConfigurationError, "ALLOWED_REPOSITORIES"):
-                    load_config({**ENV, "ALLOWED_REPOSITORIES": value})
-
-    def test_empty_repository_allowlist(self):
-        self.assertEqual(
-            load_config({**ENV, "ALLOWED_REPOSITORIES": "[]"}).allowed_repositories, frozenset()
-        )
 
     def test_default_flavor_must_be_supported(self):
         for flavor in ("unknown", "general,heavy"):
@@ -244,22 +228,27 @@ class HandlerTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assert_not_queued(signed_event({"action": action}))
 
-    def test_unauthorized_repository(self):
-        payload = copy.deepcopy(PAYLOAD)
-        payload["repository"]["full_name"] = "untrusted/repository"
-        with self.assertLogs("lambdas.webhook", level="WARNING") as logs:
-            self.assert_not_queued(signed_event(payload))
-        self.assertIn("Unauthorized repository", " ".join(logs.output))
+    def test_repositories_and_installations_from_authenticated_payload_are_forwarded(self):
+        for repository, installation_id in (("example/another-project", 987),
+                                            ("another-org/repository", 654)):
+            with self.subTest(repository=repository, installation_id=installation_id):
+                payload = copy.deepcopy(PAYLOAD)
+                payload["repository"]["full_name"] = repository
+                payload["installation"]["id"] = installation_id
+                result = self.assert_status(signed_event(payload), 200)
+                self.assertEqual(json.loads(result["body"]), {"message": "Queued"})
+                message = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
+                self.assertEqual(message, {**EXPECTED_MESSAGE, "repository": repository,
+                                          "installation_id": installation_id})
 
-    def test_default_does_not_bypass_repository_authorization(self):
+    def test_default_flavor_for_another_repository(self):
         payload = copy.deepcopy(PAYLOAD)
-        payload["repository"]["full_name"] = "untrusted/repository"
+        payload["repository"]["full_name"] = "another-org/repository"
         payload["workflow_job"]["labels"] = ["self-hosted", "linux"]
-        self.assert_not_queued(signed_event(payload))
-
-    def test_empty_allowlist_denies_all_jobs(self):
-        with patch.dict("os.environ", {"ALLOWED_REPOSITORIES": "[]"}):
-            self.assert_not_queued(signed_event())
+        self.assert_status(signed_event(payload), 200)
+        message = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
+        self.assertEqual(message, {**EXPECTED_MESSAGE, "repository": "another-org/repository",
+                                  "labels": ["self-hosted", "linux"]})
 
     def test_general_and_heavy_flavors(self):
         for flavor in ("general", "heavy"):
@@ -272,13 +261,11 @@ class HandlerTests(unittest.TestCase):
                 self.assertEqual(message, {**EXPECTED_MESSAGE, "flavor": flavor,
                                            "labels": ["self-hosted", "linux", flavor]})
 
-    def test_custom_configuration_controls_repository_and_flavor(self):
+    def test_custom_configuration_controls_flavor(self):
         with patch.dict("os.environ", {
-            "ALLOWED_REPOSITORIES": '["example/another-project"]',
             "SUPPORTED_FLAVORS": "gpu",
             "DEFAULT_FLAVOR": "gpu",
         }):
-            self.assert_not_queued(signed_event())
             payload = copy.deepcopy(PAYLOAD)
             payload["repository"]["full_name"] = "example/another-project"
             payload["workflow_job"]["labels"] = ["self-hosted", "gpu"]
@@ -380,7 +367,7 @@ class HandlerTests(unittest.TestCase):
         self.assert_not_queued(event, 400)
 
     def test_configuration_failure_is_generic_server_error(self):
-        with patch.dict("os.environ", {"ALLOWED_REPOSITORIES": "invalid"}):
+        with patch.dict("os.environ", {"SQS_QUEUE_URL": "invalid"}):
             result = self.assert_not_queued(signed_event(), 500)
         self.assertEqual(json.loads(result["body"]), {"message": "Internal server error"})
         self.ssm.get_parameter.assert_not_called()
