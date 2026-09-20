@@ -5,7 +5,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, heavy]
+    runs-on: [self-hosted, general]
 
     steps:
       - name: Hello
