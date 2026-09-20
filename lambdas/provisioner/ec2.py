@@ -45,6 +45,7 @@ def check_capacity(ec2: Any, maximum: int) -> None:
 
 
 def create_runner(ec2: Any, config: Config, request: ProvisioningRequest, parameter_name: str) -> str:
+    instance_type = config.instance_type(request.flavor)
     tags = {
         "ManagedBy": "gha-runners",
         "Repository": request.repository,
@@ -61,7 +62,10 @@ def create_runner(ec2: Any, config: Config, request: ProvisioningRequest, parame
                 "LaunchTemplateId": config.launch_template_id,
                 "Version": config.launch_template_version,
             },
-            "Overrides": [{"InstanceType": config.instance_type(request.flavor)}],
+            "Overrides": [
+                {"SubnetId": subnet_id, "InstanceType": instance_type}
+                for subnet_id in config.runner_subnet_ids
+            ],
         }],
         TargetCapacitySpecification={
             "TotalTargetCapacity": 1,

@@ -22,6 +22,7 @@ ENV = {
     "GITHUB_PRIVATE_KEY_PARAMETER": "/tests/app-key",
     "GITHUB_RUNNER_GROUP_ID": "1",
     "RUNNER_LAUNCH_TEMPLATE_ID": "lt-0123456789abcdef0",
+    "RUNNER_SUBNET_IDS": "subnet-aaa,subnet-bbb",
     "GENERAL_INSTANCE_TYPE": "t3.medium",
     "HEAVY_INSTANCE_TYPE": "c7i.2xlarge",
     "MAX_RUNNERS": "2",
@@ -63,6 +64,20 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(version=version):
                 config = load_config({**ENV, "RUNNER_LAUNCH_TEMPLATE_VERSION": version})
                 self.assertEqual(config.launch_template_version, version)
+
+    def test_two_subnet_ids(self):
+        self.assertEqual(CONFIG.runner_subnet_ids, ("subnet-aaa", "subnet-bbb"))
+
+    def test_subnet_whitespace_is_stripped(self):
+        config = load_config({**ENV, "RUNNER_SUBNET_IDS": "  subnet-aaa , \t subnet-bbb  "})
+        self.assertEqual(config.runner_subnet_ids, ("subnet-aaa", "subnet-bbb"))
+
+    def test_empty_subnet_entries_are_rejected(self):
+        for value in (",", " , ", "subnet-aaa,", ",subnet-bbb", "subnet-aaa,,subnet-bbb",
+                      "subnet-aaa,   ,subnet-bbb"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ConfigurationError, "RUNNER_SUBNET_IDS"):
+                    load_config({**ENV, "RUNNER_SUBNET_IDS": value})
 
     def test_missing_or_empty_required_configuration(self):
         for key in ENV:
@@ -276,8 +291,10 @@ class EC2Tests(unittest.TestCase):
         shape = boto3.Session()._session.get_service_model("ec2").operation_model("CreateFleet").input_shape
         for flavor, instance_type in (("general", "t3.medium"), ("heavy", "c7i.2xlarge")):
             with self.subTest(flavor=flavor):
+                client.reset_mock()
                 request = replace(REQUEST, flavor=flavor)
                 self.assertEqual(ec2.create_runner(client, CONFIG, request, JIT_NAME), "i-runner")
+                client.create_fleet.assert_called_once()
                 kwargs = client.create_fleet.call_args.kwargs
                 validate_parameters(kwargs, shape)
                 self.assertEqual(kwargs["Type"], "instant")
@@ -285,7 +302,10 @@ class EC2Tests(unittest.TestCase):
                 self.assertEqual(kwargs["LaunchTemplateConfigs"], [{
                     "LaunchTemplateSpecification": {"LaunchTemplateId": ENV["RUNNER_LAUNCH_TEMPLATE_ID"],
                                                     "Version": "$Latest"},
-                    "Overrides": [{"InstanceType": instance_type}],
+                    "Overrides": [
+                        {"SubnetId": "subnet-aaa", "InstanceType": instance_type},
+                        {"SubnetId": "subnet-bbb", "InstanceType": instance_type},
+                    ],
                 }])
                 self.assertEqual(kwargs["TargetCapacitySpecification"], {
                     "TotalTargetCapacity": 1, "OnDemandTargetCapacity": 1,
@@ -298,6 +318,18 @@ class EC2Tests(unittest.TestCase):
                     "JobId": "123", "RunId": "456", "JIT_PARAMETER_NAME": JIT_NAME,
                 })
                 self.assertNotIn("UserData", json.dumps(kwargs))
+
+    def test_single_subnet_still_requests_one_runner(self):
+        client = Mock()
+        client.create_fleet.return_value = {"Instances": [{"InstanceIds": ["i-runner"]}]}
+        config = load_config({**ENV, "RUNNER_SUBNET_IDS": "subnet-aaa"})
+        ec2.create_runner(client, config, REQUEST, JIT_NAME)
+        client.create_fleet.assert_called_once()
+        kwargs = client.create_fleet.call_args.kwargs
+        self.assertEqual(kwargs["LaunchTemplateConfigs"][0]["Overrides"], [
+            {"SubnetId": "subnet-aaa", "InstanceType": "c7i.2xlarge"},
+        ])
+        self.assertEqual(kwargs["TargetCapacitySpecification"]["TotalTargetCapacity"], 1)
 
     def test_configured_template_version_and_deterministic_token(self):
         client = Mock()
@@ -402,6 +434,12 @@ class HandlerTests(unittest.TestCase):
     def test_invalid_config_is_rejected_before_aws_calls(self):
         with patch.dict("os.environ", {"MAX_RUNNERS": "0"}):
             with self.assertRaises(ConfigurationError):
+                main.lambda_handler(sqs_event(), None)
+        self.clients.assert_not_called()
+
+    def test_invalid_subnets_are_rejected_before_aws_calls(self):
+        with patch.dict("os.environ", {"RUNNER_SUBNET_IDS": "subnet-aaa,"}):
+            with self.assertRaisesRegex(ConfigurationError, "RUNNER_SUBNET_IDS"):
                 main.lambda_handler(sqs_event(), None)
         self.clients.assert_not_called()
 

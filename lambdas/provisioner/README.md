@@ -24,16 +24,27 @@ in [.env.example](.env.example); the application does not load `.env`.
 | `GITHUB_RUNNER_GROUP_ID` | Runner group ID required by GitHub's JIT endpoint; confirm the value for your installation |
 | `RUNNER_LAUNCH_TEMPLATE_ID` | Shared runner launch template |
 | `RUNNER_LAUNCH_TEMPLATE_VERSION` | Version number, `$Latest`, or `$Default`; defaults to `$Latest` |
+| `RUNNER_SUBNET_IDS` | Comma-separated private subnet IDs, such as `subnet-aaa,subnet-bbb` |
 | `GENERAL_INSTANCE_TYPE` | Instance type for `general` jobs |
 | `HEAVY_INSTANCE_TYPE` | Instance type for `heavy` jobs |
 | `MAX_RUNNERS` | Positive limit on pending and running project instances |
 | `JIT_PARAMETER_PREFIX` | Shared SSM path prefix, such as `/gha-runners/jit` |
 
-The launch template owns the AMI, subnet/networking, instance profile, security
+The launch template owns the AMI, instance profile, security
 groups, disks, metadata settings, and bootstrap. Both flavors share the runner
 role and JIT namespace. Only their instance types differ. Use a numeric launch
 template version for stable retries; avoid changing deployment configuration
 while jobs are being retried.
+
+The launch template must not specify a subnet or Availability Zone, including
+within network-interface settings. Placement comes from `RUNNER_SUBNET_IDS`.
+Whitespace around each ID is stripped; missing values and empty entries are
+rejected. Configure private subnets compatible with the template's security
+groups and with the connectivity the runner needs.
+
+Fleet receives one override per subnet, each using the selected flavor's instance
+type. These are placement options for a single runner: total target capacity and
+On-Demand capacity both remain **1**, regardless of the number of subnets.
 
 ## Message handling
 

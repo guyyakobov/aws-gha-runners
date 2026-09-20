@@ -15,6 +15,7 @@ class Config:
     github_runner_group_id: int
     launch_template_id: str
     launch_template_version: str
+    runner_subnet_ids: tuple[str, ...]
     general_instance_type: str
     heavy_instance_type: str
     max_runners: int
@@ -55,6 +56,9 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     version = environ.get("RUNNER_LAUNCH_TEMPLATE_VERSION", "$Latest")
     if version not in ("$Latest", "$Default") and not re.fullmatch(r"[1-9][0-9]*", version):
         raise ConfigurationError("RUNNER_LAUNCH_TEMPLATE_VERSION must be a version number, $Latest, or $Default")
+    subnet_ids = tuple(subnet.strip() for subnet in required("RUNNER_SUBNET_IDS").split(","))
+    if not all(subnet_ids):
+        raise ConfigurationError("RUNNER_SUBNET_IDS must contain nonempty subnet IDs")
     general = required("GENERAL_INSTANCE_TYPE")
     heavy = required("HEAVY_INSTANCE_TYPE")
     for name, value in (("GENERAL_INSTANCE_TYPE", general), ("HEAVY_INSTANCE_TYPE", heavy)):
@@ -68,5 +72,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         or prefix.count("/") >= 15
     ):
         raise ConfigurationError("JIT_PARAMETER_PREFIX must be a valid absolute SSM path up to 180 characters")
-    return Config(app_id, private_key_parameter, group_id, template_id, version,
+    return Config(app_id, private_key_parameter, group_id, template_id, version, subnet_ids,
                   general, heavy, max_runners, prefix)
