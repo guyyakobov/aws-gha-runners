@@ -71,6 +71,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> None:
         logger.error("Provisioning failed reason=%s context=%s", exc, json.dumps(log_context))
         raise
     except Exception as exc:
-        logger.error("Provisioning failed error_type=%s context=%s",
-                     type(exc).__name__, json.dumps(log_context))
-        raise ProvisioningError("Runner provisioning failed") from None
+        logger.exception(
+            "Provisioning failed error_type=%s error=%s context=%s",
+            type(exc).__name__,
+            str(exc),
+            json.dumps(log_context),
+        )
+        raise ProvisioningError("Runner provisioning failed") from exc

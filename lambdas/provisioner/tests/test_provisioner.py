@@ -538,14 +538,32 @@ class HandlerTests(unittest.TestCase):
         for field in ("job_id", "repository", "flavor", "instance_id"):
             self.assertIn(field, output)
 
-    def test_unexpected_error_is_sanitized_before_lambda_runtime_logs_it(self):
-        self.ssm.get_parameter.side_effect = RuntimeError("private-key-secret")
-        with self.assertLogs("lambdas.provisioner", level="ERROR") as logs:
-            with self.assertRaises(main.ProvisioningError) as raised:
-                main.lambda_handler(sqs_event(), None)
-        output = " ".join(logs.output) + "".join(traceback.format_exception(raised.exception))
-        self.assertNotIn("private-key-secret", output)
-        self.ec2.create_fleet.assert_not_called()
+    def test_unexpected_error_logs_details_and_preserves_cause(self):
+        errors = (
+            aws_error("AccessDeniedException", message=(
+                "Not authorized to perform ssm:GetParameter on resource "
+                "arn:aws:ssm:us-east-1:123456789012:parameter/tests/jit/123"
+            )),
+            RuntimeError("Unexpected API failure"),
+        )
+        for original in errors:
+            with self.subTest(error_type=type(original).__name__):
+                self.ssm.get_parameter.side_effect = original
+                with self.assertLogs("lambdas.provisioner", level="ERROR") as logs:
+                    with self.assertRaises(main.ProvisioningError) as raised:
+                        main.lambda_handler(sqs_event(), None)
+                record = logs.records[0]
+                expected_context = {"job_id": 123, "repository": "example/project", "flavor": "heavy"}
+                self.assertEqual(record.getMessage(), (
+                    f"Provisioning failed error_type={type(original).__name__} "
+                    f"error={original} context={json.dumps(expected_context)}"
+                ))
+                self.assertIs(record.exc_info[1], original)
+                self.assertIsNotNone(record.exc_info[2])
+                self.assertIn("Traceback (most recent call last)", " ".join(logs.output))
+                self.assertEqual(str(raised.exception), "Runner provisioning failed")
+                self.assertIs(raised.exception.__cause__, original)
+                self.ec2.create_fleet.assert_not_called()
 
 
 if __name__ == "__main__":
