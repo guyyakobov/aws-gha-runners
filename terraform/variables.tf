@@ -26,3 +26,13 @@ variable "private_subnets" {
     availability_zone = string
   }))
 }
+
+variable "enable_ecr_endpoints" {
+  type    = bool
+  default = false
+}
+
+variable "enable_sts_endpoint" {
+  type    = bool
+  default = false
+}
