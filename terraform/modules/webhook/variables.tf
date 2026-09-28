@@ -33,3 +33,13 @@ variable "supported_flavors" {
 variable "default_flavor" {
   type = string
 }
+
+variable "lambda_runtime" {
+  type    = string
+  default = "python3.12"
+}
+
+variable "lambda_handler" {
+  type    = string
+  default = "lambdas.webhook.main.lambda_handler"
+}

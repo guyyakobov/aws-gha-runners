@@ -5,8 +5,8 @@ resource "aws_lambda_function" "webhook" {
   s3_key    = var.webhook_artifact_key
 
   role    = aws_iam_role.webhook.arn
-  handler = "lambdas.webhook.main.lambda_handler"
-  runtime = "python3.12"
+  handler = var.lambda_handler
+  runtime = var.lambda_runtime
 
   environment {
     variables = {
@@ -17,7 +17,21 @@ resource "aws_lambda_function" "webhook" {
     }
   }
 
+  depends_on = [
+    aws_cloudwatch_log_group.webhook,
+    aws_iam_role_policy.webhook
+  ]
+  
   tags = {
     Name = "${var.project_name}-webhook"
+  }
+} 
+
+resource "aws_cloudwatch_log_group" "webhook" {
+  name              = "/aws/lambda/${var.project_name}-webhook"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${var.project_name}-webhook-logs"
   }
 }
