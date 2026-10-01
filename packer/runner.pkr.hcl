@@ -7,7 +7,7 @@ packer {
   }
 }
 
-source "amazon-ebs" "github_runner" {
+source "amazon-ebs" "runner" {
   region        = var.aws_region
   instance_type = var.builder_instance_type
 
@@ -35,15 +35,14 @@ source "amazon-ebs" "github_runner" {
 
   tags = {
     ManagedBy = "Packer"
-    Purpose   = "github-actions-runner"
   }
 }
 
 build {
-  name = "github-runner"
+  name = "runner"
 
   sources = [
-    "source.amazon-ebs.github_runner"
+    "source.amazon-ebs.runner"
   ]
 
   provisioner "shell" {

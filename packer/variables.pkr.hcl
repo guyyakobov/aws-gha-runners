@@ -1,27 +1,44 @@
-variable "aws_region" {
-  type        = string
-  description = "AWS region used to build the runner AMI"
-  default     = "us-east-1"
+data "aws_ami" "runner" {
+  most_recent = true
+  owners      = ["self"]
+
+  filter {
+    name   = "name"
+    values = ["${var.project_name}-*"]
+  }
 }
 
-variable "vpc_id" {
-  type        = string
-  description = "VPC used by the temporary Packer builder"
-}
+resource "aws_launch_template" "runner" {
+  name     = "${var.project_name}-runner"
+  image_id = data.aws_ami.runner.id
 
-variable "subnet_id" {
-  type        = string
-  description = "Public subnet used by the temporary Packer builder"
-}
+  iam_instance_profile {
+    arn = aws_iam_instance_profile.runner.arn
+  }
 
-variable "builder_instance_type" {
-  type        = string
-  description = "EC2 instance type used to build the AMI"
-  default     = "t3.small"
-}
+  vpc_security_group_ids = [
+    aws_security_group.runner.id
+  ]
 
-variable "ami_name_prefix" {
-  type        = string
-  description = "Prefix for GitHub Actions runner AMIs"
-  default     = "github-runner"
+  metadata_options {
+    http_endpoint          = "enabled"
+    http_tokens            = "required"
+    instance_metadata_tags = "enabled"
+  }
+
+  user_data = filebase64("${path.module}/user_data.sh")
+
+  instance_initiated_shutdown_behavior = "terminate"
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "${var.project_name}-runner"
+    }
+  }
+
+  tags = {
+    Name = "${var.project_name}-runner"
+  }
 }

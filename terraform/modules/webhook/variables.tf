@@ -43,3 +43,13 @@ variable "lambda_handler" {
   type    = string
   default = "lambdas.webhook.main.lambda_handler"
 }
+
+variable "enable_waf" {
+  type    = bool
+  default = false
+}
+
+variable "waf_rate_limit" {
+  type    = number
+  default = 1000
+}
