@@ -19,8 +19,9 @@ resource "aws_wafv2_web_acl" "webhook" {
 
     statement {
       rate_based_statement {
-        limit              = var.waf_rate_limit
-        aggregate_key_type = "IP"
+        limit                 = var.waf_rate_limit
+        evaluation_window_sec = var.waf_evaluation_window_sec
+        aggregate_key_type    = "IP"
       }
     }
 
@@ -48,3 +49,4 @@ resource "aws_wafv2_web_acl_association" "webhook" {
   resource_arn = aws_api_gateway_stage.webhook.arn
   web_acl_arn  = aws_wafv2_web_acl.webhook[0].arn
 }
+

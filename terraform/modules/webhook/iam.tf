@@ -43,8 +43,9 @@ data "aws_iam_policy_document" "webhook" {
     ]
 
     resources = [
-      data.aws_ssm_parameter.webhook_secret.arn
+      local.webhook_secret_ssm_parameter_arn
     ]
+  }
 
   statement {
     effect = "Allow"
@@ -66,8 +67,3 @@ resource "aws_iam_role_policy" "webhook" {
 
   policy = data.aws_iam_policy_document.webhook.json
 }
-
-data "aws_ssm_parameter" "webhook_secret" {
-  name = var.webhook_secret_ssm_parameter
-}
-
