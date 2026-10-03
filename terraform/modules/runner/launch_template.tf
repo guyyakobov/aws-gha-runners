@@ -4,12 +4,7 @@ data "aws_ami" "runner" {
 
   filter {
     name   = "name"
-    values = ["${var.project_name}-*"]
-  }
-
-  filter {
-    name   = "tag:Purpose"
-    values = ["github-actions-runner"]
+    values = ["${local.runner_ami_name_prefix}-*"]
   }
 }
 
@@ -46,4 +41,9 @@ resource "aws_launch_template" "runner" {
   tags = {
     Name = "${var.project_name}-runner"
   }
+
+  depends_on = [
+    aws_iam_role_policy.runner,
+    aws_vpc_security_group_egress_rule.runner
+  ]
 }

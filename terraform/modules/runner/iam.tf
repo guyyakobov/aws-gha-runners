@@ -1,7 +1,3 @@
-data "aws_caller_identity" "current" {}
-
-data "aws_region" "current" {}
-
 resource "aws_iam_role" "runner" {
   name = "${var.project_name}-runner-role"
 
@@ -34,7 +30,7 @@ data "aws_iam_policy_document" "runner" {
     ]
 
     resources = [
-      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.jit_parameter_prefix}/*"
+      local.jit_ssm_parameter_arn
     ]
   }
 }

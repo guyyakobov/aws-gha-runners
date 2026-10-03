@@ -42,4 +42,6 @@ aws ssm delete-parameter \
 # Start the ephemeral GitHub Actions runner
 cd /opt/actions-runner
 
+export RUNNER_ALLOW_RUNASROOT=1
+
 ./run.sh --jitconfig "${ENCODED_JIT_CONFIG}"
