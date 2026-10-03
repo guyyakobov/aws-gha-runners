@@ -6,11 +6,6 @@ data "aws_ami" "runner" {
     name   = "name"
     values = ["${local.ami_name_prefix}-*"]
   }
-
-  filter {
-    name   = "tag:Purpose"
-    values = ["github-actions-runner"]
-  }
 }
 
 resource "aws_launch_template" "runner" {
