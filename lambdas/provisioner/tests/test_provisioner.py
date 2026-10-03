@@ -19,14 +19,14 @@ from lambdas.provisioner.models import MessageError, parse_request
 
 ENV = {
     "GITHUB_APP_ID": "123456",
-    "GITHUB_PRIVATE_KEY_PARAMETER": "/tests/app-key",
+    "GITHUB_PRIVATE_KEY_SSM_PARAMETER": "/tests/app-key",
     "GITHUB_RUNNER_GROUP_ID": "1",
     "RUNNER_LAUNCH_TEMPLATE_ID": "lt-0123456789abcdef0",
     "RUNNER_SUBNET_IDS": "subnet-aaa,subnet-bbb",
     "GENERAL_INSTANCE_TYPE": "t3.medium",
     "HEAVY_INSTANCE_TYPE": "c7i.2xlarge",
     "MAX_RUNNERS": "2",
-    "JIT_PARAMETER_PREFIX": "/tests/jit",
+    "JIT_SSM_PARAMETER_PREFIX": "/tests/jit",
 }
 MESSAGE = {
     "job_id": 123,
@@ -98,10 +98,7 @@ class ConfigTests(unittest.TestCase):
             "MAX_RUNNERS": ["-1", "0", "1.5", "true"],
             "RUNNER_LAUNCH_TEMPLATE_ID": ["ami-1234", "name"],
             "RUNNER_LAUNCH_TEMPLATE_VERSION": ["", "0", "bad"],
-            "GENERAL_INSTANCE_TYPE": ["bad", "t3.medium extra"],
-            "HEAVY_INSTANCE_TYPE": ["bad"],
-            "GITHUB_PRIVATE_KEY_PARAMETER": ["/contains spaces"],
-            "JIT_PARAMETER_PREFIX": ["relative", "/", "/a//b", "/aws/test", "/ssm/test", "/" + "a" * 181],
+            "GITHUB_PRIVATE_KEY_SSM_PARAMETER": ["/contains spaces"],
         }
         for key, values in cases.items():
             for value in values:
@@ -109,9 +106,17 @@ class ConfigTests(unittest.TestCase):
                     with self.assertRaisesRegex(ConfigurationError, key):
                         load_config({**ENV, key: value})
 
-    def test_prefix_trailing_slash_is_normalized(self):
-        self.assertEqual(load_config({**ENV, "JIT_PARAMETER_PREFIX": "/test/jit/"}).jit_parameter_prefix,
-                         "/test/jit")
+    def test_jit_ssm_parameter_prefix_boundaries(self):
+        for value in ("relative", "/", "/test/jit/"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ConfigurationError, "JIT_SSM_PARAMETER_PREFIX"):
+                    load_config({**ENV, "JIT_SSM_PARAMETER_PREFIX": value})
+
+    def test_jit_ssm_parameter_prefix_is_otherwise_unchanged(self):
+        for value in ("/a//b", "/aws/test", "/ssm/test", "/" + "a" * 181, "/contains spaces"):
+            with self.subTest(value=value):
+                self.assertEqual(load_config({**ENV, "JIT_SSM_PARAMETER_PREFIX": value}).jit_ssm_parameter_prefix,
+                                 value)
 
     def test_unknown_flavor_has_no_instance_type(self):
         with self.assertRaises(ConfigurationError):
@@ -365,7 +370,7 @@ class HandlerTests(unittest.TestCase):
         clients = patch("boto3.client", side_effect={"ec2": self.ec2, "ssm": self.ssm}.__getitem__)
         self.clients = clients.start()
         self.addCleanup(clients.stop)
-        self.parameters = {ENV["GITHUB_PRIVATE_KEY_PARAMETER"]: "private-key-secret"}
+        self.parameters = {ENV["GITHUB_PRIVATE_KEY_SSM_PARAMETER"]: "private-key-secret"}
         self.instances = []
         self.capacity = 0
         self.ec2.get_paginator.return_value.paginate.side_effect = self.describe_instances

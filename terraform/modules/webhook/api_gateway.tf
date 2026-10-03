@@ -38,16 +38,25 @@ resource "aws_api_gateway_deployment" "webhook" {
   rest_api_id = aws_api_gateway_rest_api.webhook.id
 
   triggers = {
-    redeployment = sha1(jsonencode([
-      aws_api_gateway_resource.webhook.id,
-      aws_api_gateway_method.webhook_post.id,
-      aws_api_gateway_integration.webhook_lambda.id
-    ]))
+    redeployment = sha1(jsonencode({
+      resource = {
+        id        = aws_api_gateway_resource.webhook.id
+        path_part = aws_api_gateway_resource.webhook.path_part
+      }
+      method = {
+        id            = aws_api_gateway_method.webhook_post.id
+        http_method   = aws_api_gateway_method.webhook_post.http_method
+        authorization = aws_api_gateway_method.webhook_post.authorization
+      }
+      integration = {
+        id                      = aws_api_gateway_integration.webhook_lambda.id
+        http_method             = aws_api_gateway_integration.webhook_lambda.http_method
+        integration_http_method = aws_api_gateway_integration.webhook_lambda.integration_http_method
+        type                    = aws_api_gateway_integration.webhook_lambda.type
+        uri                     = aws_api_gateway_integration.webhook_lambda.uri
+      }
+    }))
   }
-
-  depends_on = [
-    aws_api_gateway_integration.webhook_lambda
-  ]
 
   lifecycle {
     create_before_destroy = true

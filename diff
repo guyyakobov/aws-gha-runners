@@ -1,0 +1,1121 @@
+diff --git a/terraform/locals.tf b/terraform/locals.tf
+index 98566cf..0cfd725 100644
+--- a/terraform/locals.tf
++++ b/terraform/locals.tf
+@@ -1,4 +1,7 @@
+ locals {
++  supported_flavors = toset(["general", "heavy"])
++  default_flavor    = "general"
++
+   common_tags = {
+     Project   = var.project_name
+     ManagedBy = "Terraform"
+diff --git a/terraform/main.tf b/terraform/main.tf
+index e69de29..bc1fce3 100644
+--- a/terraform/main.tf
++++ b/terraform/main.tf
+@@ -0,0 +1,61 @@
++module "network" {
++  source = "./modules/network"
++
++  project_name         = var.project_name
++  vpc_cidr_block       = var.vpc_cidr_block
++  public_subnets       = var.public_subnets
++  private_subnets      = var.private_subnets
++  enable_ecr_endpoints = var.enable_ecr_endpoints
++  enable_sts_endpoint  = var.enable_sts_endpoint
++
++  vpc_endpoint_allowed_security_group_ids = {
++    runner = module.runner.security_group_id
++  }
++}
++
++module "runner" {
++  source = "./modules/runner"
++
++  project_name         = var.project_name
++  vpc_id               = module.network.vpc_id
++  ami_name_prefix      = var.runner_ami_name_prefix
++  jit_parameter_prefix = var.jit_parameter_prefix
++}
++
++module "webhook" {
++  source = "./modules/webhook"
++
++  project_name                 = var.project_name
++  artifacts_bucket_name        = aws_s3_bucket.lambda_artifacts.bucket
++  webhook_artifact_key         = var.webhook_artifact_key
++  webhook_secret_ssm_parameter = var.webhook_secret_ssm_parameter
++  sqs_queue_url                = aws_sqs_queue.jobs.url
++  sqs_queue_arn                = aws_sqs_queue.jobs.arn
++  supported_flavors            = local.supported_flavors
++  default_flavor               = local.default_flavor
++}
++
++module "provisioner" {
++  source = "./modules/provisioner"
++
++  project_name             = var.project_name
++  artifacts_bucket_name    = aws_s3_bucket.lambda_artifacts.bucket
++  provisioner_artifact_key = var.provisioner_artifact_key
++  sqs_queue_arn            = aws_sqs_queue.jobs.arn
++  lambda_timeout           = var.provisioner_lambda_timeout
++
++  github_app_id                = var.github_app_id
++  github_private_key_parameter = var.github_private_key_parameter
++  github_runner_group_id       = var.github_runner_group_id
++
++  runner_role_arn                = module.runner.role_arn
++  runner_launch_template_id      = module.runner.launch_template_id
++  runner_launch_template_version = tostring(module.runner.launch_template_version)
++  runner_subnet_ids              = module.network.private_subnet_ids
++
++  general_instance_type = var.general_instance_type
++  heavy_instance_type   = var.heavy_instance_type
++  max_runners           = var.max_runners
++
++  jit_parameter_prefix = var.jit_parameter_prefix
++}
+diff --git a/terraform/modules/network/endpoints.tf b/terraform/modules/network/endpoints.tf
+index be89c2d..700ae44 100644
+--- a/terraform/modules/network/endpoints.tf
++++ b/terraform/modules/network/endpoints.tf
+@@ -1,10 +1,10 @@
+ data "aws_region" "current" {}
+ 
+ resource "aws_vpc_endpoint" "ecr" {
+-  for_each = var.enable_ecr_private_access ? local.ecr_interface_endpoints : {}
++  for_each = var.enable_ecr_endpoints ? local.ecr_interface_endpoints : {}
+ 
+   vpc_id            = aws_vpc.main.id
+-  service_name      = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
++  service_name      = "com.amazonaws.${data.aws_region.current.region}.${each.value}"
+   vpc_endpoint_type = "Interface"
+ 
+   subnet_ids = [
+@@ -23,50 +23,10 @@ resource "aws_vpc_endpoint" "ecr" {
+ }
+ 
+ resource "aws_vpc_endpoint" "s3" {
+-  count = var.enable_ecr_private_access ? 1 : 0
++  count = var.enable_ecr_endpoints ? 1 : 0
+ 
+   vpc_id            = aws_vpc.main.id
+-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+-  vpc_endpoint_type = "Gateway"
+-
+-  route_table_ids = [
+-    for route_table in aws_route_table.private : route_table.id
+-  ]
+-
+-  tags = {
+-    Name = "${var.project_name}-s3-vpce"
+-  }
+-}
+-
+-data "aws_region" "current" {}
+-
+-resource "aws_vpc_endpoint" "ecr" {
+-  for_each = var.enable_ecr_private_access ? local.ecr_interface_endpoints : {}
+-
+-  vpc_id            = aws_vpc.main.id
+-  service_name      = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
+-  vpc_endpoint_type = "Interface"
+-
+-  subnet_ids = [
+-    for subnet in aws_subnet.private : subnet.id
+-  ]
+-
+-  security_group_ids = [
+-    aws_security_group.vpc_endpoints.id
+-  ]
+-
+-  private_dns_enabled = true
+-
+-  tags = {
+-    Name = "${var.project_name}-ecr-${each.key}-vpce"
+-  }
+-}
+-
+-resource "aws_vpc_endpoint" "s3" {
+-  count = var.enable_ecr_private_access ? 1 : 0
+-
+-  vpc_id            = aws_vpc.main.id
+-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
++  service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
+   vpc_endpoint_type = "Gateway"
+ 
+   route_table_ids = [
+@@ -82,7 +42,7 @@ resource "aws_vpc_endpoint" "sts" {
+   count = var.enable_sts_endpoint ? 1 : 0
+ 
+   vpc_id            = aws_vpc.main.id
+-  service_name      = "com.amazonaws.${data.aws_region.current.name}.sts"
++  service_name      = "com.amazonaws.${data.aws_region.current.region}.sts"
+   vpc_endpoint_type = "Interface"
+ 
+   subnet_ids = [
+@@ -99,13 +59,3 @@ resource "aws_vpc_endpoint" "sts" {
+     Name = "${var.project_name}-sts-vpce"
+   }
+ }
+-
+-resource "aws_security_group" "vpc_endpoints" {
+-  name        = "${var.project_name}-vpce-sg"
+-  description = "Security group for VPC interface endpoints"
+-  vpc_id      = aws_vpc.main.id
+-
+-  tags = {
+-    Name = "${var.project_name}-vpce-sg"
+-  }
+-}
+\ No newline at end of file
+diff --git a/terraform/modules/network/outputs.tf b/terraform/modules/network/outputs.tf
+index de24675..660f518 100644
+--- a/terraform/modules/network/outputs.tf
++++ b/terraform/modules/network/outputs.tf
+@@ -1,11 +1,9 @@
+ output "vpc_id" {
+-  value = aws_vpc.main.id
++  description = "ID of the VPC"
++  value       = aws_vpc.main.id
+ }
+ 
+ output "private_subnet_ids" {
+-  value = values(aws_subnet.private)[*].id
++  description = "IDs of the private subnets used for runner placement"
++  value       = values(aws_subnet.private)[*].id
+ }
+-
+-output "vpc_endpoints_security_group_id" {
+-  value = aws_security_group.vpc_endpoints.id
+-}
+\ No newline at end of file
+diff --git a/terraform/modules/network/security.tf b/terraform/modules/network/security.tf
+new file mode 100644
+index 0000000..40b7699
+--- /dev/null
++++ b/terraform/modules/network/security.tf
+@@ -0,0 +1,21 @@
++resource "aws_security_group" "vpc_endpoints" {
++  name        = "${var.project_name}-vpce-sg"
++  description = "Security group for VPC interface endpoints"
++  vpc_id      = aws_vpc.main.id
++
++  tags = {
++    Name = "${var.project_name}-vpce-sg"
++  }
++}
++
++resource "aws_vpc_security_group_ingress_rule" "vpc_endpoints_https" {
++  for_each = var.vpc_endpoint_allowed_security_group_ids
++
++  security_group_id            = aws_security_group.vpc_endpoints.id
++  referenced_security_group_id = each.value
++
++  description = "Allow HTTPS from ${each.key}"
++  from_port   = 443
++  to_port     = 443
++  ip_protocol = "tcp"
++}
+diff --git a/terraform/modules/network/variables.tf b/terraform/modules/network/variables.tf
+index 7cc7831..2da176d 100644
+--- a/terraform/modules/network/variables.tf
++++ b/terraform/modules/network/variables.tf
+@@ -1,31 +1,60 @@
+ variable "project_name" {
+-  type = string
++  description = "Name prefix used for network resources"
++  type        = string
+ }
+ 
+ variable "vpc_cidr_block" {
+-  type = string
++  description = "IPv4 CIDR block for the VPC"
++  type        = string
+ }
+ 
+ variable "public_subnets" {
++  description = "Public subnets keyed by the matching private-subnet and NAT gateway key"
+   type = map(object({
+     cidr_block        = string
+     availability_zone = string
+   }))
++
++  validation {
++    condition     = length(var.public_subnets) > 0
++    error_message = "public_subnets must contain at least one subnet."
++  }
+ }
+ 
+ variable "private_subnets" {
++  description = "Private subnets keyed by the matching public subnet and NAT gateway key"
+   type = map(object({
+     cidr_block        = string
+     availability_zone = string
+   }))
++
++  validation {
++    condition = (
++      length(var.private_subnets) > 0 &&
++      alltrue([
++        for key, subnet in var.private_subnets :
++        contains(keys(var.public_subnets), key) &&
++        try(var.public_subnets[key].availability_zone == subnet.availability_zone, false)
++      ])
++    )
++    error_message = "Each private subnet must have a same-key public subnet in the same availability zone."
++  }
+ }
+ 
+ variable "enable_ecr_endpoints" {
+-  type    = bool
+-  default = false
++  description = "Whether to create private ECR API, ECR Docker, and S3 endpoints"
++  type        = bool
++  default     = false
+ }
+ 
+ variable "enable_sts_endpoint" {
+-  type    = bool
+-  default = false
+-}
+\ No newline at end of file
++  description = "Whether to create a private STS interface endpoint"
++  type        = bool
++  default     = false
++}
++
++variable "vpc_endpoint_allowed_security_group_ids" {
++  description = "Security group IDs allowed to reach interface endpoints over HTTPS, keyed by a stable caller-defined label"
++  type        = map(string)
++  default     = {}
++}
+diff --git a/terraform/modules/provisioner/event_source.tf b/terraform/modules/provisioner/event_source.tf
+index 207087c..82367e9 100644
+--- a/terraform/modules/provisioner/event_source.tf
++++ b/terraform/modules/provisioner/event_source.tf
+@@ -4,8 +4,4 @@ resource "aws_lambda_event_source_mapping" "jobs" {
+ 
+   batch_size = 1
+   enabled    = true
+-
+-  depends_on = [
+-    aws_iam_role_policy.provisioner
+-  ]
+-}
+\ No newline at end of file
++}
+diff --git a/terraform/modules/provisioner/lambda.tf b/terraform/modules/provisioner/lambda.tf
+index acebb4c..94648f4 100644
+--- a/terraform/modules/provisioner/lambda.tf
++++ b/terraform/modules/provisioner/lambda.tf
+@@ -1,7 +1,7 @@
+ resource "aws_lambda_function" "provisioner" {
+   function_name = "${var.project_name}-provisioner"
+ 
+-  s3_bucket = var.artifacts_bucket
++  s3_bucket = var.artifacts_bucket_name
+   s3_key    = var.provisioner_artifact_key
+ 
+   role    = aws_iam_role.provisioner.arn
+@@ -13,24 +13,23 @@ resource "aws_lambda_function" "provisioner" {
+ 
+   environment {
+     variables = {
+-      GITHUB_APP_ID                  = var.github_app_id
+-      GITHUB_PRIVATE_KEY_PARAMETER   = var.github_private_key_parameter
+-      GITHUB_RUNNER_GROUP_ID         = var.github_runner_group_id
++      GITHUB_APP_ID                = var.github_app_id
++      GITHUB_PRIVATE_KEY_PARAMETER = var.github_private_key_parameter
++      GITHUB_RUNNER_GROUP_ID       = tostring(var.github_runner_group_id)
+ 
+       RUNNER_LAUNCH_TEMPLATE_ID      = var.runner_launch_template_id
+       RUNNER_LAUNCH_TEMPLATE_VERSION = var.runner_launch_template_version
+       RUNNER_SUBNET_IDS              = join(",", var.runner_subnet_ids)
+ 
+-      GENERAL_INSTANCE_TYPE          = var.general_instance_type
+-      HEAVY_INSTANCE_TYPE            = var.heavy_instance_type
+-      MAX_RUNNERS                    = tostring(var.max_runners)
++      GENERAL_INSTANCE_TYPE = var.general_instance_type
++      HEAVY_INSTANCE_TYPE   = var.heavy_instance_type
++      MAX_RUNNERS           = tostring(var.max_runners)
+ 
+-      JIT_PARAMETER_PREFIX           = var.jit_parameter_prefix
++      JIT_PARAMETER_PREFIX = local.jit_parameter_prefix
+     }
+   }
+ 
+   depends_on = [
+-    aws_cloudwatch_log_group.provisioner,
+     aws_iam_role_policy.provisioner
+   ]
+ 
+@@ -46,4 +45,4 @@ resource "aws_cloudwatch_log_group" "provisioner" {
+   tags = {
+     Name = "${var.project_name}-provisioner-logs"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/terraform/modules/provisioner/locals.tf b/terraform/modules/provisioner/locals.tf
+index 1c1fa05..783cdb1 100644
+--- a/terraform/modules/provisioner/locals.tf
++++ b/terraform/modules/provisioner/locals.tf
+@@ -1,5 +1,6 @@
+ locals {
+-  github_private_key_arn = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.github_private_key_parameter}"
++  github_private_key_arn = startswith(var.github_private_key_parameter, "arn:") ? var.github_private_key_parameter : "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(var.github_private_key_parameter, "/")}"
+ 
+-  jit_parameter_arn = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.jit_parameter_prefix}/*"
+-}
+\ No newline at end of file
++  jit_parameter_prefix = "/${trim(var.jit_parameter_prefix, "/")}"
++  jit_parameter_arn    = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.jit_parameter_prefix}/*"
++}
+diff --git a/terraform/modules/provisioner/variables.tf b/terraform/modules/provisioner/variables.tf
+index e0c938a..77ad0d7 100644
+--- a/terraform/modules/provisioner/variables.tf
++++ b/terraform/modules/provisioner/variables.tf
+@@ -1,4 +1,150 @@
++variable "project_name" {
++  description = "Name prefix used for provisioner resources"
++  type        = string
++}
++
++variable "artifacts_bucket_name" {
++  description = "Name of the S3 bucket containing the provisioner deployment package"
++  type        = string
++}
++
++variable "provisioner_artifact_key" {
++  description = "S3 object key for the provisioner Lambda deployment package"
++  type        = string
++}
++
++variable "sqs_queue_arn" {
++  description = "ARN of the jobs queue consumed by the provisioner"
++  type        = string
++}
++
+ variable "lambda_timeout" {
+-  type    = number
+-  default = 30
+-}
+\ No newline at end of file
++  description = "Provisioner Lambda timeout in seconds"
++  type        = number
++
++  validation {
++    condition = (
++      var.lambda_timeout >= 1 &&
++      var.lambda_timeout <= 900 &&
++      floor(var.lambda_timeout) == var.lambda_timeout
++    )
++    error_message = "lambda_timeout must be an integer from 1 through 900."
++  }
++}
++
++variable "lambda_runtime" {
++  description = "Runtime used by the provisioner Lambda function"
++  type        = string
++  default     = "python3.12"
++}
++
++variable "lambda_handler" {
++  description = "Handler used by the provisioner Lambda function"
++  type        = string
++  default     = "lambdas.provisioner.main.lambda_handler"
++}
++
++variable "github_app_id" {
++  description = "Numeric GitHub App ID"
++  type        = string
++
++  validation {
++    condition     = can(regex("^[1-9][0-9]*$", var.github_app_id))
++    error_message = "github_app_id must be a positive numeric ID."
++  }
++}
++
++variable "github_private_key_parameter" {
++  description = "Name, path, or ARN of the SSM SecureString containing the GitHub App private key"
++  type        = string
++
++  validation {
++    condition     = length(var.github_private_key_parameter) > 0 && length(regexall("\\s", var.github_private_key_parameter)) == 0
++    error_message = "github_private_key_parameter must be nonempty and contain no whitespace."
++  }
++}
++
++variable "github_runner_group_id" {
++  description = "Numeric GitHub Actions runner group ID"
++  type        = number
++
++  validation {
++    condition     = var.github_runner_group_id > 0 && floor(var.github_runner_group_id) == var.github_runner_group_id
++    error_message = "github_runner_group_id must be a positive integer."
++  }
++}
++
++variable "runner_role_arn" {
++  description = "ARN of the IAM role that the provisioner may pass to runner instances"
++  type        = string
++}
++
++variable "runner_launch_template_id" {
++  description = "ID of the EC2 launch template used to create runners"
++  type        = string
++}
++
++variable "runner_launch_template_version" {
++  description = "EC2 launch template version used to create runners"
++  type        = string
++
++  validation {
++    condition     = contains(["$Latest", "$Default"], var.runner_launch_template_version) || can(regex("^[1-9][0-9]*$", var.runner_launch_template_version))
++    error_message = "runner_launch_template_version must be a positive version number, $Latest, or $Default."
++  }
++}
++
++variable "runner_subnet_ids" {
++  description = "Private subnet IDs available for runner placement"
++  type        = list(string)
++
++  validation {
++    condition     = length(var.runner_subnet_ids) > 0 && alltrue([for subnet_id in var.runner_subnet_ids : length(trimspace(subnet_id)) > 0])
++    error_message = "runner_subnet_ids must contain at least one nonempty subnet ID."
++  }
++}
++
++variable "general_instance_type" {
++  description = "EC2 instance type used for general runner jobs"
++  type        = string
++
++  validation {
++    condition     = can(regex("^[a-z0-9-]+\\.[a-z0-9]+$", var.general_instance_type))
++    error_message = "general_instance_type must be a valid EC2 instance type name."
++  }
++}
++
++variable "heavy_instance_type" {
++  description = "EC2 instance type used for heavy runner jobs"
++  type        = string
++
++  validation {
++    condition     = can(regex("^[a-z0-9-]+\\.[a-z0-9]+$", var.heavy_instance_type))
++    error_message = "heavy_instance_type must be a valid EC2 instance type name."
++  }
++}
++
++variable "max_runners" {
++  description = "Maximum number of pending and running project runner instances"
++  type        = number
++
++  validation {
++    condition     = var.max_runners > 0 && floor(var.max_runners) == var.max_runners
++    error_message = "max_runners must be a positive integer."
++  }
++}
++
++variable "jit_parameter_prefix" {
++  description = "Absolute SSM path prefix used for one-time runner JIT configurations"
++  type        = string
++
++  validation {
++    condition = (
++      can(regex("^/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$", var.jit_parameter_prefix)) &&
++      !contains(["aws", "ssm"], lower(try(split("/", var.jit_parameter_prefix)[1], ""))) &&
++      length(var.jit_parameter_prefix) <= 180 &&
++      length(regexall("/", var.jit_parameter_prefix)) < 15
++    )
++    error_message = "jit_parameter_prefix must be a valid absolute SSM path up to 180 characters and must not use an aws or ssm top-level prefix."
++  }
++}
+diff --git a/terraform/modules/runner/iam.tf b/terraform/modules/runner/iam.tf
+index 7f1dd06..44ceec8 100644
+--- a/terraform/modules/runner/iam.tf
++++ b/terraform/modules/runner/iam.tf
+@@ -34,7 +34,7 @@ data "aws_iam_policy_document" "runner" {
+     ]
+ 
+     resources = [
+-      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.jit_parameter_prefix}/*"
++      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.jit_parameter_prefix}/*"
+     ]
+   }
+ }
+@@ -48,4 +48,4 @@ resource "aws_iam_role_policy" "runner" {
+ resource "aws_iam_instance_profile" "runner" {
+   name = "${var.project_name}-runner"
+   role = aws_iam_role.runner.name
+-}
+\ No newline at end of file
++}
+diff --git a/terraform/modules/runner/launch_template.tf b/terraform/modules/runner/launch_template.tf
+index 0e701d7..eb22cbf 100644
+--- a/terraform/modules/runner/launch_template.tf
++++ b/terraform/modules/runner/launch_template.tf
+@@ -4,7 +4,7 @@ data "aws_ami" "runner" {
+ 
+   filter {
+     name   = "name"
+-    values = ["${var.project_name}-*"]
++    values = ["${var.ami_name_prefix}-*"]
+   }
+ 
+   filter {
+@@ -46,4 +46,8 @@ resource "aws_launch_template" "runner" {
+   tags = {
+     Name = "${var.project_name}-runner"
+   }
+-}
+\ No newline at end of file
++
++  depends_on = [
++    aws_iam_role_policy.runner
++  ]
++}
+diff --git a/terraform/modules/runner/locals.tf b/terraform/modules/runner/locals.tf
+new file mode 100644
+index 0000000..5dda1ff
+--- /dev/null
++++ b/terraform/modules/runner/locals.tf
+@@ -0,0 +1,3 @@
++locals {
++  jit_parameter_prefix = "/${trim(var.jit_parameter_prefix, "/")}"
++}
+diff --git a/terraform/modules/runner/outputs.tf b/terraform/modules/runner/outputs.tf
+index 13cc27d..f2f16d2 100644
+--- a/terraform/modules/runner/outputs.tf
++++ b/terraform/modules/runner/outputs.tf
+@@ -1,3 +1,19 @@
+ output "security_group_id" {
+-  value = aws_security_group.runner.id
+-}
+\ No newline at end of file
++  description = "ID of the security group attached to runner instances"
++  value       = aws_security_group.runner.id
++}
++
++output "role_arn" {
++  description = "ARN of the IAM role used by runner instances"
++  value       = aws_iam_role.runner.arn
++}
++
++output "launch_template_id" {
++  description = "ID of the runner EC2 launch template"
++  value       = aws_launch_template.runner.id
++}
++
++output "launch_template_version" {
++  description = "Latest version number of the runner EC2 launch template"
++  value       = aws_launch_template.runner.latest_version
++}
+diff --git a/terraform/modules/runner/user_data.sh b/terraform/modules/runner/user_data.sh
+index b1079ed..bf22334 100644
+--- a/terraform/modules/runner/user_data.sh
++++ b/terraform/modules/runner/user_data.sh
+@@ -42,4 +42,6 @@ aws ssm delete-parameter \
+ # Start the ephemeral GitHub Actions runner
+ cd /opt/actions-runner
+ 
+-./run.sh --jitconfig "${ENCODED_JIT_CONFIG}"
+\ No newline at end of file
++export RUNNER_ALLOW_RUNASROOT=1
++
++./run.sh --jitconfig "${ENCODED_JIT_CONFIG}"
+diff --git a/terraform/modules/runner/variables.tf b/terraform/modules/runner/variables.tf
+index 9dd4710..93870eb 100644
+--- a/terraform/modules/runner/variables.tf
++++ b/terraform/modules/runner/variables.tf
+@@ -1,12 +1,34 @@
+ variable "project_name" {
+-  type = string
++  description = "Name prefix used for runner resources"
++  type        = string
+ }
+ 
+ variable "vpc_id" {
+-  type = string
++  description = "ID of the VPC where runner instances are launched"
++  type        = string
+ }
+ 
+-variable "root_volume_size" {
+-  type    = number
+-  default = 10
+-}
+\ No newline at end of file
++variable "ami_name_prefix" {
++  description = "Name prefix used to select the most recent runner AMI"
++  type        = string
++
++  validation {
++    condition     = length(trimspace(var.ami_name_prefix)) > 0
++    error_message = "ami_name_prefix must not be empty."
++  }
++}
++
++variable "jit_parameter_prefix" {
++  description = "Absolute SSM path prefix containing one-time runner JIT configurations"
++  type        = string
++
++  validation {
++    condition = (
++      can(regex("^/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$", var.jit_parameter_prefix)) &&
++      !contains(["aws", "ssm"], lower(try(split("/", var.jit_parameter_prefix)[1], ""))) &&
++      length(var.jit_parameter_prefix) <= 180 &&
++      length(regexall("/", var.jit_parameter_prefix)) < 15
++    )
++    error_message = "jit_parameter_prefix must be a valid absolute SSM path up to 180 characters and must not use an aws or ssm top-level prefix."
++  }
++}
+diff --git a/terraform/modules/webhook/api_gateway.tf b/terraform/modules/webhook/api_gateway.tf
+index 5ce3072..ba387b9 100644
+--- a/terraform/modules/webhook/api_gateway.tf
++++ b/terraform/modules/webhook/api_gateway.tf
+@@ -38,17 +38,26 @@ resource "aws_api_gateway_deployment" "webhook" {
+   rest_api_id = aws_api_gateway_rest_api.webhook.id
+ 
+   triggers = {
+-    redeployment = sha1(jsonencode([
+-      aws_api_gateway_resource.webhook.id,
+-      aws_api_gateway_method.webhook_post.id,
+-      aws_api_gateway_integration.webhook_lambda.id
+-    ]))
++    redeployment = sha1(jsonencode({
++      resource = {
++        id        = aws_api_gateway_resource.webhook.id
++        path_part = aws_api_gateway_resource.webhook.path_part
++      }
++      method = {
++        id            = aws_api_gateway_method.webhook_post.id
++        http_method   = aws_api_gateway_method.webhook_post.http_method
++        authorization = aws_api_gateway_method.webhook_post.authorization
++      }
++      integration = {
++        id                      = aws_api_gateway_integration.webhook_lambda.id
++        http_method             = aws_api_gateway_integration.webhook_lambda.http_method
++        integration_http_method = aws_api_gateway_integration.webhook_lambda.integration_http_method
++        type                    = aws_api_gateway_integration.webhook_lambda.type
++        uri                     = aws_api_gateway_integration.webhook_lambda.uri
++      }
++    }))
+   }
+ 
+-  depends_on = [
+-    aws_api_gateway_integration.webhook_lambda
+-  ]
+-
+   lifecycle {
+     create_before_destroy = true
+   }
+diff --git a/terraform/modules/webhook/iam.tf b/terraform/modules/webhook/iam.tf
+index 86dbb32..faffc61 100644
+--- a/terraform/modules/webhook/iam.tf
++++ b/terraform/modules/webhook/iam.tf
+@@ -43,8 +43,9 @@ data "aws_iam_policy_document" "webhook" {
+     ]
+ 
+     resources = [
+-      data.aws_ssm_parameter.webhook_secret.arn
++      local.webhook_secret_parameter_arn
+     ]
++  }
+ 
+   statement {
+     effect = "Allow"
+@@ -66,8 +67,3 @@ resource "aws_iam_role_policy" "webhook" {
+ 
+   policy = data.aws_iam_policy_document.webhook.json
+ }
+-
+-data "aws_ssm_parameter" "webhook_secret" {
+-  name = var.webhook_secret_ssm_parameter
+-}
+-
+diff --git a/terraform/modules/webhook/lambda.tf b/terraform/modules/webhook/lambda.tf
+index 0f52f9c..980bbc8 100644
+--- a/terraform/modules/webhook/lambda.tf
++++ b/terraform/modules/webhook/lambda.tf
+@@ -1,7 +1,7 @@
+ resource "aws_lambda_function" "webhook" {
+   function_name = "${var.project_name}-webhook"
+ 
+-  s3_bucket = var.artifacts_bucket
++  s3_bucket = var.artifacts_bucket_name
+   s3_key    = var.webhook_artifact_key
+ 
+   role    = aws_iam_role.webhook.arn
+@@ -18,14 +18,13 @@ resource "aws_lambda_function" "webhook" {
+   }
+ 
+   depends_on = [
+-    aws_cloudwatch_log_group.webhook,
+     aws_iam_role_policy.webhook
+   ]
+-  
++
+   tags = {
+     Name = "${var.project_name}-webhook"
+   }
+-} 
++}
+ 
+ resource "aws_cloudwatch_log_group" "webhook" {
+   name              = "/aws/lambda/${var.project_name}-webhook"
+@@ -34,4 +33,4 @@ resource "aws_cloudwatch_log_group" "webhook" {
+   tags = {
+     Name = "${var.project_name}-webhook-logs"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/terraform/modules/webhook/locals.tf b/terraform/modules/webhook/locals.tf
+new file mode 100644
+index 0000000..8fa1ac9
+--- /dev/null
++++ b/terraform/modules/webhook/locals.tf
+@@ -0,0 +1,7 @@
++data "aws_caller_identity" "current" {}
++
++data "aws_region" "current" {}
++
++locals {
++  webhook_secret_parameter_arn = startswith(var.webhook_secret_ssm_parameter, "arn:") ? var.webhook_secret_ssm_parameter : "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(var.webhook_secret_ssm_parameter, "/")}"
++}
+diff --git a/terraform/modules/webhook/outputs.tf b/terraform/modules/webhook/outputs.tf
+index e69de29..1943f90 100644
+--- a/terraform/modules/webhook/outputs.tf
++++ b/terraform/modules/webhook/outputs.tf
+@@ -0,0 +1,4 @@
++output "webhook_url" {
++  description = "Public URL for GitHub webhook deliveries"
++  value       = "${aws_api_gateway_stage.webhook.invoke_url}${aws_api_gateway_resource.webhook.path}"
++}
+diff --git a/terraform/modules/webhook/variables.tf b/terraform/modules/webhook/variables.tf
+index 9d5dede..b8a0658 100644
+--- a/terraform/modules/webhook/variables.tf
++++ b/terraform/modules/webhook/variables.tf
+@@ -1,55 +1,78 @@
+ variable "project_name" {
+-  type = string
++  description = "Name prefix used for webhook resources"
++  type        = string
+ }
+ 
+ variable "sqs_queue_url" {
+-  type = string
++  description = "URL of the jobs queue that receives accepted webhook events"
++  type        = string
+ }
+ 
+ variable "sqs_queue_arn" {
+-  type = string
++  description = "ARN of the jobs queue that receives accepted webhook events"
++  type        = string
+ }
+ 
+-variable "artifacts_bucket" {
+-  type = string
++variable "artifacts_bucket_name" {
++  description = "Name of the S3 bucket containing the webhook deployment package"
++  type        = string
+ }
+ 
+ variable "webhook_artifact_key" {
+-  type = string
++  description = "S3 object key for the webhook Lambda deployment package"
++  type        = string
+ }
+ 
+ variable "webhook_secret_ssm_parameter" {
+-  type = string
+-}
++  description = "Name, path, or ARN of the SSM SecureString containing the webhook secret"
++  type        = string
+ 
+-variable "webhook_secret_ssm_parameter_arn" {
+-  type = string
++  validation {
++    condition     = length(var.webhook_secret_ssm_parameter) > 0 && length(regexall("\\s", var.webhook_secret_ssm_parameter)) == 0
++    error_message = "webhook_secret_ssm_parameter must be nonempty and contain no whitespace."
++  }
+ }
+ 
+ variable "supported_flavors" {
+-  type = set(string)
++  description = "Runner flavor labels accepted from workflow jobs"
++  type        = set(string)
++
++  validation {
++    condition     = length(var.supported_flavors) > 0 && alltrue([for flavor in var.supported_flavors : length(trimspace(flavor)) > 0])
++    error_message = "supported_flavors must contain at least one nonempty flavor."
++  }
+ }
+ 
+ variable "default_flavor" {
+-  type = string
++  description = "Runner flavor used when an accepted workflow job has no explicit supported flavor"
++  type        = string
++
++  validation {
++    condition     = contains(var.supported_flavors, var.default_flavor)
++    error_message = "default_flavor must be included in supported_flavors."
++  }
+ }
+ 
+ variable "lambda_runtime" {
+-  type    = string
+-  default = "python3.12"
++  description = "Runtime used by the webhook Lambda function"
++  type        = string
++  default     = "python3.12"
+ }
+ 
+ variable "lambda_handler" {
+-  type    = string
+-  default = "lambdas.webhook.main.lambda_handler"
++  description = "Handler used by the webhook Lambda function"
++  type        = string
++  default     = "lambdas.webhook.main.lambda_handler"
+ }
+ 
+ variable "enable_waf" {
+-  type    = bool
+-  default = false
++  description = "Whether to associate a regional WAF web ACL with the webhook API stage"
++  type        = bool
++  default     = false
+ }
+ 
+ variable "waf_rate_limit" {
+-  type    = number
+-  default = 1000
+-}
+\ No newline at end of file
++  description = "Maximum requests per WAF rate-based evaluation window for each source IP"
++  type        = number
++  default     = 1000
++}
+diff --git a/terraform/moved.tf b/terraform/moved.tf
+new file mode 100644
+index 0000000..f03fd75
+--- /dev/null
++++ b/terraform/moved.tf
+@@ -0,0 +1,4 @@
++moved {
++  from = aws_vpc_security_group_ingress_rule.runner_to_vpc_endpoints
++  to   = module.network.aws_vpc_security_group_ingress_rule.vpc_endpoints_https["runner"]
++}
+diff --git a/terraform/outputs.tf b/terraform/outputs.tf
+index e69de29..d20e5e7 100644
+--- a/terraform/outputs.tf
++++ b/terraform/outputs.tf
+@@ -0,0 +1,9 @@
++output "lambda_artifacts_bucket_name" {
++  description = "Name of the S3 bucket used for Lambda deployment artifacts"
++  value       = aws_s3_bucket.lambda_artifacts.bucket
++}
++
++output "webhook_url" {
++  description = "Public URL to configure as the GitHub App webhook endpoint"
++  value       = module.webhook.webhook_url
++}
+diff --git a/terraform/security.tf b/terraform/security.tf
+deleted file mode 100644
+index 7557787..0000000
+--- a/terraform/security.tf
++++ /dev/null
+@@ -1,9 +0,0 @@
+-resource "aws_vpc_security_group_ingress_rule" "runner_to_vpc_endpoints" {
+-  security_group_id            = module.network.vpc_endpoints_security_group_id
+-  referenced_security_group_id = module.runner.security_group_id
+-
+-  description = "Allow HTTPS from GitHub Actions runners"
+-  from_port   = 443
+-  to_port     = 443
+-  ip_protocol = "tcp"
+-}
+\ No newline at end of file
+diff --git a/terraform/sqs.tf b/terraform/sqs.tf
+index c6bd718..9c443ee 100644
+--- a/terraform/sqs.tf
++++ b/terraform/sqs.tf
+@@ -8,9 +8,9 @@ resource "aws_sqs_queue" "jobs_dlq" {
+ }
+ 
+ resource "aws_sqs_queue" "jobs" {
+-  name                      = "${var.project_name}-jobs"
+-  message_retention_seconds = 86400
+-  visibility_timeout_seconds = 180
++  name                       = "${var.project_name}-jobs"
++  message_retention_seconds  = 86400
++  visibility_timeout_seconds = var.provisioner_lambda_timeout * 6
+ 
+   redrive_policy = jsonencode({
+     deadLetterTargetArn = aws_sqs_queue.jobs_dlq.arn
+@@ -20,4 +20,4 @@ resource "aws_sqs_queue" "jobs" {
+   tags = {
+     Name = "${var.project_name}-jobs"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/terraform/variables.tf b/terraform/variables.tf
+index 4d7139d..d8fd75b 100644
+--- a/terraform/variables.tf
++++ b/terraform/variables.tf
+@@ -10,10 +10,12 @@ variable "project_name" {
+ }
+ 
+ variable "vpc_cidr_block" {
+-  type = string
++  description = "IPv4 CIDR block for the project VPC"
++  type        = string
+ }
+ 
+ variable "public_subnets" {
++  description = "Public subnets keyed by the matching private-subnet and NAT gateway key"
+   type = map(object({
+     cidr_block        = string
+     availability_zone = string
+@@ -21,6 +23,7 @@ variable "public_subnets" {
+ }
+ 
+ variable "private_subnets" {
++  description = "Private runner subnets keyed by the matching public subnet and NAT gateway key"
+   type = map(object({
+     cidr_block        = string
+     availability_zone = string
+@@ -28,11 +31,123 @@ variable "private_subnets" {
+ }
+ 
+ variable "enable_ecr_endpoints" {
+-  type    = bool
+-  default = false
++  description = "Whether to create private ECR API, ECR Docker, and S3 endpoints"
++  type        = bool
++  default     = false
+ }
+ 
+ variable "enable_sts_endpoint" {
+-  type    = bool
+-  default = false
+-}
+\ No newline at end of file
++  description = "Whether to create a private STS interface endpoint"
++  type        = bool
++  default     = false
++}
++
++variable "webhook_artifact_key" {
++  description = "S3 object key for the webhook Lambda deployment package"
++  type        = string
++}
++
++variable "provisioner_artifact_key" {
++  description = "S3 object key for the provisioner Lambda deployment package"
++  type        = string
++}
++
++variable "webhook_secret_ssm_parameter" {
++  description = "Name, path, or ARN of the SSM SecureString containing the webhook secret"
++  type        = string
++
++  validation {
++    condition     = length(var.webhook_secret_ssm_parameter) > 0 && length(regexall("\\s", var.webhook_secret_ssm_parameter)) == 0
++    error_message = "webhook_secret_ssm_parameter must be nonempty and contain no whitespace."
++  }
++}
++
++variable "github_private_key_parameter" {
++  description = "Name, path, or ARN of the SSM SecureString containing the GitHub App private key"
++  type        = string
++
++  validation {
++    condition     = length(var.github_private_key_parameter) > 0 && length(regexall("\\s", var.github_private_key_parameter)) == 0
++    error_message = "github_private_key_parameter must be nonempty and contain no whitespace."
++  }
++}
++
++variable "github_app_id" {
++  description = "Numeric GitHub App ID"
++  type        = string
++
++  validation {
++    condition     = can(regex("^[1-9][0-9]*$", var.github_app_id))
++    error_message = "github_app_id must be a positive numeric ID."
++  }
++}
++
++variable "github_runner_group_id" {
++  description = "Numeric GitHub Actions runner group ID"
++  type        = number
++
++  validation {
++    condition     = var.github_runner_group_id > 0 && floor(var.github_runner_group_id) == var.github_runner_group_id
++    error_message = "github_runner_group_id must be a positive integer."
++  }
++}
++
++variable "general_instance_type" {
++  description = "EC2 instance type used for general runner jobs"
++  type        = string
++}
++
++variable "heavy_instance_type" {
++  description = "EC2 instance type used for heavy runner jobs"
++  type        = string
++}
++
++variable "max_runners" {
++  description = "Maximum number of pending and running project runner instances"
++  type        = number
++
++  validation {
++    condition     = var.max_runners > 0 && floor(var.max_runners) == var.max_runners
++    error_message = "max_runners must be a positive integer."
++  }
++}
++
++variable "jit_parameter_prefix" {
++  description = "Absolute SSM path prefix used for one-time runner JIT configurations"
++  type        = string
++
++  validation {
++    condition = (
++      can(regex("^/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$", var.jit_parameter_prefix)) &&
++      !contains(["aws", "ssm"], lower(try(split("/", var.jit_parameter_prefix)[1], ""))) &&
++      length(var.jit_parameter_prefix) <= 180 &&
++      length(regexall("/", var.jit_parameter_prefix)) < 15
++    )
++    error_message = "jit_parameter_prefix must be a valid absolute SSM path up to 180 characters and must not use an aws or ssm top-level prefix."
++  }
++}
++
++variable "runner_ami_name_prefix" {
++  description = "Name prefix used to select the most recent runner AMI"
++  type        = string
++
++  validation {
++    condition     = length(trimspace(var.runner_ami_name_prefix)) > 0
++    error_message = "runner_ami_name_prefix must not be empty."
++  }
++}
++
++variable "provisioner_lambda_timeout" {
++  description = "Provisioner Lambda timeout in seconds; the jobs queue visibility timeout is six times this value"
++  type        = number
++  default     = 30
++
++  validation {
++    condition = (
++      var.provisioner_lambda_timeout >= 1 &&
++      var.provisioner_lambda_timeout <= 900 &&
++      floor(var.provisioner_lambda_timeout) == var.provisioner_lambda_timeout
++    )
++    error_message = "provisioner_lambda_timeout must be an integer from 1 through 900."
++  }
++}

@@ -1,7 +1,7 @@
 resource "aws_lambda_function" "provisioner" {
   function_name = "${var.project_name}-provisioner"
 
-  s3_bucket = var.artifacts_bucket
+  s3_bucket = var.artifacts_bucket_name
   s3_key    = var.provisioner_artifact_key
 
   role    = aws_iam_role.provisioner.arn
@@ -13,19 +13,19 @@ resource "aws_lambda_function" "provisioner" {
 
   environment {
     variables = {
-      GITHUB_APP_ID                  = var.github_app_id
-      GITHUB_PRIVATE_KEY_PARAMETER   = var.github_private_key_parameter
-      GITHUB_RUNNER_GROUP_ID         = var.github_runner_group_id
+      GITHUB_APP_ID                    = var.github_app_id
+      GITHUB_PRIVATE_KEY_SSM_PARAMETER = var.github_private_key_ssm_parameter
+      GITHUB_RUNNER_GROUP_ID           = tostring(var.github_runner_group_id)
 
       RUNNER_LAUNCH_TEMPLATE_ID      = var.runner_launch_template_id
       RUNNER_LAUNCH_TEMPLATE_VERSION = var.runner_launch_template_version
       RUNNER_SUBNET_IDS              = join(",", var.runner_subnet_ids)
 
-      GENERAL_INSTANCE_TYPE          = var.general_instance_type
-      HEAVY_INSTANCE_TYPE            = var.heavy_instance_type
-      MAX_RUNNERS                    = tostring(var.max_runners)
+      GENERAL_INSTANCE_TYPE = var.general_instance_type
+      HEAVY_INSTANCE_TYPE   = var.heavy_instance_type
+      MAX_RUNNERS           = tostring(var.max_runners)
 
-      JIT_PARAMETER_PREFIX           = var.jit_parameter_prefix
+      JIT_SSM_PARAMETER_PREFIX = var.jit_ssm_parameter_prefix
     }
   }
 

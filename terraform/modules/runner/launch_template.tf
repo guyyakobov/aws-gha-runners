@@ -4,7 +4,7 @@ data "aws_ami" "runner" {
 
   filter {
     name   = "name"
-    values = ["${var.project_name}-*"]
+    values = ["${local.ami_name_prefix}-*"]
   }
 
   filter {
@@ -46,4 +46,8 @@ resource "aws_launch_template" "runner" {
   tags = {
     Name = "${var.project_name}-runner"
   }
+
+  depends_on = [
+    aws_iam_role_policy.runner
+  ]
 }

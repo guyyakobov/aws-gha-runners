@@ -1,7 +1,7 @@
 resource "aws_lambda_function" "webhook" {
   function_name = "${var.project_name}-webhook"
 
-  s3_bucket = var.artifacts_bucket
+  s3_bucket = var.artifacts_bucket_name
   s3_key    = var.webhook_artifact_key
 
   role    = aws_iam_role.webhook.arn
@@ -21,11 +21,11 @@ resource "aws_lambda_function" "webhook" {
     aws_cloudwatch_log_group.webhook,
     aws_iam_role_policy.webhook
   ]
-  
+
   tags = {
     Name = "${var.project_name}-webhook"
   }
-} 
+}
 
 resource "aws_cloudwatch_log_group" "webhook" {
   name              = "/aws/lambda/${var.project_name}-webhook"

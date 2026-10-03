@@ -29,11 +29,11 @@ def provision_runner(request: ProvisioningRequest, config: Config, ec2: Any, ssm
     if existing is not None:
         return existing
     check_capacity(ec2, config.max_runners)
-    parameter_name = f"{config.jit_parameter_prefix}/{request.job_id}"
+    parameter_name = f"{config.jit_ssm_parameter_prefix}/{request.job_id}"
     jit_config = read_jit_config(ssm, parameter_name)
     created_parameter = False
     if jit_config is None:
-        private_key = read_secure_parameter(ssm, config.github_private_key_parameter)
+        private_key = read_secure_parameter(ssm, config.github_private_key_ssm_parameter)
         app_jwt = generate_app_jwt(config.github_app_id, private_key)
         token = installation_token(app_jwt, request.installation_id)
         jit_config = generate_jit_config(request, token, config.github_runner_group_id)

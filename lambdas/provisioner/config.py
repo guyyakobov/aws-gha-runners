@@ -11,7 +11,7 @@ class ConfigurationError(ValueError):
 @dataclass(frozen=True)
 class Config:
     github_app_id: str
-    github_private_key_parameter: str
+    github_private_key_ssm_parameter: str
     github_runner_group_id: int
     launch_template_id: str
     launch_template_version: str
@@ -19,7 +19,7 @@ class Config:
     general_instance_type: str
     heavy_instance_type: str
     max_runners: int
-    jit_parameter_prefix: str
+    jit_ssm_parameter_prefix: str
 
     def instance_type(self, flavor: str) -> str:
         if flavor == "general":
@@ -47,9 +47,9 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     app_id = str(positive_integer("GITHUB_APP_ID"))
     group_id = positive_integer("GITHUB_RUNNER_GROUP_ID")
     max_runners = positive_integer("MAX_RUNNERS")
-    private_key_parameter = required("GITHUB_PRIVATE_KEY_PARAMETER")
-    if any(c.isspace() for c in private_key_parameter):
-        raise ConfigurationError("GITHUB_PRIVATE_KEY_PARAMETER cannot contain whitespace")
+    private_key_ssm_parameter = required("GITHUB_PRIVATE_KEY_SSM_PARAMETER")
+    if any(c.isspace() for c in private_key_ssm_parameter):
+        raise ConfigurationError("GITHUB_PRIVATE_KEY_SSM_PARAMETER cannot contain whitespace")
     template_id = required("RUNNER_LAUNCH_TEMPLATE_ID")
     if not re.fullmatch(r"lt-[0-9a-f]+", template_id):
         raise ConfigurationError("RUNNER_LAUNCH_TEMPLATE_ID must be a launch template ID")
@@ -61,16 +61,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         raise ConfigurationError("RUNNER_SUBNET_IDS must contain nonempty subnet IDs")
     general = required("GENERAL_INSTANCE_TYPE")
     heavy = required("HEAVY_INSTANCE_TYPE")
-    for name, value in (("GENERAL_INSTANCE_TYPE", general), ("HEAVY_INSTANCE_TYPE", heavy)):
-        if not re.fullmatch(r"[a-z0-9-]+\.[a-z0-9]+", value):
-            raise ConfigurationError(f"{name} must be an EC2 instance type")
-    prefix = required("JIT_PARAMETER_PREFIX").rstrip("/")
-    if (
-        not re.fullmatch(r"/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+", prefix)
-        or prefix.split("/")[1].lower().startswith(("aws", "ssm"))
-        or len(prefix) > 180
-        or prefix.count("/") >= 15
-    ):
-        raise ConfigurationError("JIT_PARAMETER_PREFIX must be a valid absolute SSM path up to 180 characters")
-    return Config(app_id, private_key_parameter, group_id, template_id, version, subnet_ids,
+    prefix = required("JIT_SSM_PARAMETER_PREFIX")
+    if not prefix.startswith("/") or prefix.endswith("/"):
+        raise ConfigurationError("JIT_SSM_PARAMETER_PREFIX must start with / and must not end with /")
+    return Config(app_id, private_key_ssm_parameter, group_id, template_id, version, subnet_ids,
                   general, heavy, max_runners, prefix)

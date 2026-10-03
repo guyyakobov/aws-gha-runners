@@ -20,7 +20,7 @@ in [.env.example](.env.example); the application does not load `.env`.
 | Variable | Purpose |
 | --- | --- |
 | `GITHUB_APP_ID` | Numeric GitHub App ID |
-| `GITHUB_PRIVATE_KEY_PARAMETER` | SSM SecureString containing the PEM private key |
+| `GITHUB_PRIVATE_KEY_SSM_PARAMETER` | SSM SecureString parameter path containing the PEM private key |
 | `GITHUB_RUNNER_GROUP_ID` | Runner group ID required by GitHub's JIT endpoint; confirm the value for your installation |
 | `RUNNER_LAUNCH_TEMPLATE_ID` | Shared runner launch template |
 | `RUNNER_LAUNCH_TEMPLATE_VERSION` | Version number, `$Latest`, or `$Default`; defaults to `$Latest` |
@@ -28,7 +28,7 @@ in [.env.example](.env.example); the application does not load `.env`.
 | `GENERAL_INSTANCE_TYPE` | Instance type for `general` jobs |
 | `HEAVY_INSTANCE_TYPE` | Instance type for `heavy` jobs |
 | `MAX_RUNNERS` | Positive limit on pending and running project instances |
-| `JIT_PARAMETER_PREFIX` | Shared SSM path prefix, such as `/gha-runners/jit` |
+| `JIT_SSM_PARAMETER_PREFIX` | Shared SSM parameter path prefix, such as `/gha-runners/jit` |
 
 The launch template owns the AMI, instance profile, security
 groups, disks, metadata settings, and bootstrap. Both flavors share the runner
@@ -85,7 +85,7 @@ as an already accepted request, even if it is stopping or terminated. Otherwise,
 it counts only project instances in `pending` or `running`, across all result
 pages. At or above the limit, it raises `CapacityError` so SQS can retry later.
 
-JIT config is stored at `<JIT_PARAMETER_PREFIX>/<job_id>` with `Overwrite=False`.
+JIT config is stored at `<JIT_SSM_PARAMETER_PREFIX>/<job_id>` with `Overwrite=False`.
 An existing SecureString is reused, allowing a retry after an interrupted write
 to continue without replacing credentials. `Intelligent-Tiering` lets SSM store
 values above 4 KB as advanced parameters, up to its 8 KB limit; advanced
