@@ -1,7 +1,3 @@
-data "aws_region" "current" {}
-
-data "aws_caller_identity" "current" {}
-
 resource "aws_iam_role" "provisioner" {
   name = "${var.project_name}-provisioner-role"
 
@@ -49,7 +45,7 @@ data "aws_iam_policy_document" "provisioner" {
     ]
 
     resources = [
-      local.github_private_key_arn
+      local.github_private_key_ssm_parameter_arn
     ]
   }
 
@@ -63,7 +59,7 @@ data "aws_iam_policy_document" "provisioner" {
     ]
 
     resources = [
-      local.jit_parameter_arn
+      local.jit_ssm_parameter_arn
     ]
   }
 
