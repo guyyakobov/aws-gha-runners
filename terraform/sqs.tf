@@ -8,9 +8,9 @@ resource "aws_sqs_queue" "jobs_dlq" {
 }
 
 resource "aws_sqs_queue" "jobs" {
-  name                      = "${var.project_name}-jobs"
-  message_retention_seconds = 86400
-  visibility_timeout_seconds = 180
+  name                       = "${var.project_name}-jobs"
+  message_retention_seconds  = 86400
+  visibility_timeout_seconds = var.provisioner_lambda_timeout * 6
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.jobs_dlq.arn
