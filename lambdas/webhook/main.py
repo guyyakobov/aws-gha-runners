@@ -2,8 +2,8 @@ import json
 import logging
 from typing import Any
 
-from .config import ConfigurationError, load_config
-from .github_webhook import (
+from config import ConfigurationError, load_config
+from github_webhook import (
     PayloadError,
     get_header,
     parse_action,
@@ -13,12 +13,12 @@ from .github_webhook import (
     valid_signature_format,
     verify_signature,
 )
-from .secret import get_webhook_secret
-from .sqs_queue import send_request
-from .validator import validate_job
+from secret import get_webhook_secret
+from sqs_queue import send_request
+from validator import validate_job
 
 logger = logging.getLogger(__name__)
-logging.getLogger(__package__).setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 def response(status_code: int, message: str) -> dict[str, Any]:

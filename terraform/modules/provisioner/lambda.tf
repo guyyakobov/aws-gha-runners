@@ -1,8 +1,15 @@
+data "archive_file" "provisioner" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../../lambdas/provisioner"
+  output_path = "${path.module}/../../../lambdas/provisioner.zip"
+}
+
 resource "aws_lambda_function" "provisioner" {
   function_name = "${var.project_name}-provisioner"
 
-  s3_bucket = var.artifacts_bucket_name
-  s3_key    = var.provisioner_artifact_key
+  filename         = data.archive_file.provisioner.output_path
+  source_code_hash = data.archive_file.provisioner.output_base64sha256
+  architectures    = ["x86_64"]
 
   role    = aws_iam_role.provisioner.arn
   handler = var.lambda_handler
@@ -13,6 +20,7 @@ resource "aws_lambda_function" "provisioner" {
 
   environment {
     variables = {
+      PYTHONPATH                       = "/var/task/package:/var/runtime"
       GITHUB_APP_ID                    = var.github_app_id
       GITHUB_PRIVATE_KEY_SSM_PARAMETER = var.github_private_key_ssm_parameter
       GITHUB_RUNNER_GROUP_ID           = tostring(var.github_runner_group_id)

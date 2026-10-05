@@ -48,16 +48,6 @@ variable "webhook_lambda_timeout" {
   default     = 10
 }
 
-variable "webhook_artifact_key" {
-  type        = string
-  description = "S3 object key for the webhook Lambda deployment package"
-}
-
-variable "provisioner_artifact_key" {
-  type        = string
-  description = "S3 object key for the provisioner Lambda deployment package"
-}
-
 variable "webhook_secret_ssm_parameter" {
   type        = string
   description = "SSM parameter path containing the webhook secret"

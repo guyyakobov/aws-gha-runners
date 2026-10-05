@@ -5,7 +5,7 @@ from typing import Any
 
 import boto3
 
-from .models import ProvisioningRequest
+from models import ProvisioningRequest
 
 
 @lru_cache(maxsize=1)

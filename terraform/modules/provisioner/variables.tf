@@ -3,16 +3,6 @@ variable "project_name" {
   description = "Name prefix used for provisioner resources"
 }
 
-variable "artifacts_bucket_name" {
-  type        = string
-  description = "Name of the S3 bucket containing the provisioner deployment package"
-}
-
-variable "provisioner_artifact_key" {
-  type        = string
-  description = "S3 object key for the provisioner Lambda deployment package"
-}
-
 variable "sqs_queue_arn" {
   type        = string
   description = "ARN of the jobs queue consumed by the provisioner"
@@ -40,7 +30,7 @@ variable "lambda_runtime" {
 variable "lambda_handler" {
   type        = string
   description = "Handler used by the provisioner Lambda function"
-  default     = "lambdas.provisioner.main.lambda_handler"
+  default     = "main.lambda_handler"
 }
 
 variable "github_app_id" {

@@ -1,8 +1,15 @@
+data "archive_file" "webhook" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../../lambdas/webhook"
+  output_path = "${path.module}/../../../lambdas/webhook.zip"
+}
+
 resource "aws_lambda_function" "webhook" {
   function_name = "${var.project_name}-webhook"
 
-  s3_bucket = var.artifacts_bucket_name
-  s3_key    = var.webhook_artifact_key
+  filename         = data.archive_file.webhook.output_path
+  source_code_hash = data.archive_file.webhook.output_base64sha256
+  architectures    = ["x86_64"]
 
   role    = aws_iam_role.webhook.arn
   handler = var.lambda_handler
@@ -12,6 +19,7 @@ resource "aws_lambda_function" "webhook" {
 
   environment {
     variables = {
+      PYTHONPATH                   = "/var/task/package:/var/runtime"
       SQS_QUEUE_URL                = var.sqs_queue_url
       WEBHOOK_SECRET_SSM_PARAMETER = var.webhook_secret_ssm_parameter
       SUPPORTED_FLAVORS            = join(",", var.supported_flavors)

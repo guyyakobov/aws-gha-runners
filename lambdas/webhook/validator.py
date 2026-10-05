@@ -1,10 +1,11 @@
 import json
 import logging
 
-from .config import Config
-from .models import ProvisioningRequest, WorkflowJob
+from config import Config
+from models import ProvisioningRequest, WorkflowJob
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def validate_job(job: WorkflowJob, config: Config) -> ProvisioningRequest | None:

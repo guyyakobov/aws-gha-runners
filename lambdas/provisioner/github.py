@@ -5,7 +5,7 @@ from uuid import uuid4
 import jwt
 import requests
 
-from .models import ProvisioningRequest
+from models import ProvisioningRequest
 
 
 class GitHubError(RuntimeError):

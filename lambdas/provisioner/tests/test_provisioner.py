@@ -12,9 +12,12 @@ from botocore.validate import validate_parameters
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from lambdas.provisioner import ec2, github, jit_store, main
-from lambdas.provisioner.config import ConfigurationError, load_config
-from lambdas.provisioner.models import MessageError, parse_request
+import ec2
+import github
+import jit_store
+import main
+from config import ConfigurationError, load_config
+from models import MessageError, parse_request
 
 
 ENV = {
@@ -164,7 +167,7 @@ class MessageTests(unittest.TestCase):
 
 class GitHubTests(unittest.TestCase):
     def setUp(self):
-        patcher = patch("lambdas.provisioner.github.requests.post")
+        patcher = patch("github.requests.post")
         self.post = patcher.start()
         self.addCleanup(patcher.stop)
         self.response = MagicMock()
@@ -175,7 +178,7 @@ class GitHubTests(unittest.TestCase):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                 serialization.NoEncryption()).decode()
-        with patch("lambdas.provisioner.github.time.time", return_value=2000000000):
+        with patch("github.time.time", return_value=2000000000):
             token = github.generate_app_jwt("123456", pem)
         claims = jwt.decode(token, key.public_key(), algorithms=["RS256"],
                             options={"verify_exp": False, "verify_iat": False})
@@ -183,7 +186,7 @@ class GitHubTests(unittest.TestCase):
         self.assertEqual(jwt.get_unverified_header(token)["alg"], "RS256")
 
     def test_signing_failure_is_safe(self):
-        with patch("lambdas.provisioner.github.jwt.encode", side_effect=ValueError("private-key-value")):
+        with patch("github.jwt.encode", side_effect=ValueError("private-key-value")):
             with self.assertRaises(github.GitHubError) as raised:
                 github.generate_app_jwt("123456", "private-key-value")
         self.assertNotIn("private-key-value", "".join(traceback.format_exception(raised.exception)))
@@ -380,7 +383,7 @@ class HandlerTests(unittest.TestCase):
         self.ssm.delete_parameter.side_effect = lambda **kwargs: self.parameters.pop(kwargs["Name"])
         for name, value in (("generate_app_jwt", "jwt-secret"), ("installation_token", "installation-secret"),
                             ("generate_jit_config", "jit-secret")):
-            patcher = patch(f"lambdas.provisioner.main.{name}", return_value=value)
+            patcher = patch(f"main.{name}", return_value=value)
             setattr(self, name, patcher.start())
             self.addCleanup(patcher.stop)
 
@@ -520,7 +523,7 @@ class HandlerTests(unittest.TestCase):
         original = ec2.FleetError("CreateFleet did not return exactly one runner instance")
         self.ec2.create_fleet.side_effect = original
         self.ssm.delete_parameter.side_effect = RuntimeError("cleanup-private-detail")
-        with self.assertLogs("lambdas.provisioner", level="ERROR") as logs:
+        with self.assertLogs(main.logger, level="ERROR") as logs:
             with self.assertRaises(ec2.FleetError) as raised:
                 main.lambda_handler(sqs_event(), None)
         self.assertIs(raised.exception, original)
@@ -535,7 +538,7 @@ class HandlerTests(unittest.TestCase):
         self.ssm.delete_parameter.assert_not_called()
 
     def test_success_logs_have_context_without_credentials(self):
-        with self.assertLogs("lambdas.provisioner", level="INFO") as logs:
+        with self.assertLogs(main.logger, level="INFO") as logs:
             main.lambda_handler(sqs_event(), None)
         output = " ".join(logs.output)
         for secret in ("private-key-secret", "jwt-secret", "installation-secret", "jit-secret"):
@@ -554,7 +557,7 @@ class HandlerTests(unittest.TestCase):
         for original in errors:
             with self.subTest(error_type=type(original).__name__):
                 self.ssm.get_parameter.side_effect = original
-                with self.assertLogs("lambdas.provisioner", level="ERROR") as logs:
+                with self.assertLogs(main.logger, level="ERROR") as logs:
                     with self.assertRaises(main.ProvisioningError) as raised:
                         main.lambda_handler(sqs_event(), None)
                 record = logs.records[0]

@@ -26,8 +26,6 @@ module "webhook" {
   source = "./modules/webhook"
 
   project_name                 = var.project_name
-  artifacts_bucket_name        = aws_s3_bucket.lambda_artifacts.bucket
-  webhook_artifact_key         = var.webhook_artifact_key
   webhook_secret_ssm_parameter = var.webhook_secret_ssm_parameter
   lambda_timeout               = var.webhook_lambda_timeout
   sqs_queue_url                = aws_sqs_queue.jobs.url
@@ -43,11 +41,9 @@ module "webhook" {
 module "provisioner" {
   source = "./modules/provisioner"
 
-  project_name             = var.project_name
-  artifacts_bucket_name    = aws_s3_bucket.lambda_artifacts.bucket
-  provisioner_artifact_key = var.provisioner_artifact_key
-  sqs_queue_arn            = aws_sqs_queue.jobs.arn
-  lambda_timeout           = var.provisioner_lambda_timeout
+  project_name   = var.project_name
+  sqs_queue_arn  = aws_sqs_queue.jobs.arn
+  lambda_timeout = var.provisioner_lambda_timeout
 
   github_app_id                    = var.github_app_id
   github_private_key_ssm_parameter = var.github_private_key_ssm_parameter

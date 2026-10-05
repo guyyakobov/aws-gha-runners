@@ -6,8 +6,8 @@ import json
 import re
 from typing import Any
 
-from .config import valid_repository_name
-from .models import WorkflowJob
+from config import valid_repository_name
+from models import WorkflowJob
 
 
 class PayloadError(ValueError):

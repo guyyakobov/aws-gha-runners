@@ -5,14 +5,14 @@ from typing import Any
 
 import boto3
 
-from .config import Config, ConfigurationError, load_config
-from .ec2 import CapacityError, FleetError, check_capacity, create_runner, find_existing_runner
-from .github import GitHubError, generate_app_jwt, generate_jit_config, installation_token
-from .jit_store import delete_jit_config, read_jit_config, read_secure_parameter, store_jit_config
-from .models import MessageError, ProvisioningRequest, parse_request
+from config import Config, ConfigurationError, load_config
+from ec2 import CapacityError, FleetError, check_capacity, create_runner, find_existing_runner
+from github import GitHubError, generate_app_jwt, generate_jit_config, installation_token
+from jit_store import delete_jit_config, read_jit_config, read_secure_parameter, store_jit_config
+from models import MessageError, ProvisioningRequest, parse_request
 
 logger = logging.getLogger(__name__)
-logging.getLogger(__package__).setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 class ProvisioningError(RuntimeError):

@@ -13,16 +13,6 @@ variable "sqs_queue_arn" {
   description = "ARN of the jobs queue that receives accepted webhook events"
 }
 
-variable "artifacts_bucket_name" {
-  type        = string
-  description = "Name of the S3 bucket containing the webhook deployment package"
-}
-
-variable "webhook_artifact_key" {
-  type        = string
-  description = "S3 object key for the webhook Lambda deployment package"
-}
-
 variable "webhook_secret_ssm_parameter" {
   description = "SSM parameter path containing the webhook secret"
   type        = string
@@ -79,7 +69,7 @@ variable "lambda_runtime" {
 variable "lambda_handler" {
   type        = string
   description = "Handler used by the webhook Lambda function"
-  default     = "lambdas.webhook.main.lambda_handler"
+  default     = "main.lambda_handler"
 }
 
 variable "enable_waf" {

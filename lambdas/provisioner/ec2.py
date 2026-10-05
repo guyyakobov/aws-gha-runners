@@ -1,7 +1,7 @@
 from typing import Any
 
-from .config import Config
-from .models import ProvisioningRequest
+from config import Config
+from models import ProvisioningRequest
 
 
 class CapacityError(RuntimeError):

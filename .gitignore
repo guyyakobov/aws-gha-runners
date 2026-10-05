@@ -3,3 +3,7 @@
 __pycache__/
 *.py[cod]
 .terraform/
+lambdas/*/package/
+lambdas/*/package.zip
+/lambdas/webhook.zip
+/lambdas/provisioner.zip
